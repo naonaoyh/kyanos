@@ -1252,6 +1252,14 @@ func TestParseGGASentence_SouthernHemisphere(t *testing.T) {
 	if nmea.Altitude != 50.5 {
 		t.Errorf("Altitude = %.1f, want 50.5", nmea.Altitude)
 	}
+	// DiffAge = 1.0 (field 12 in the sentence)
+	if nmea.DiffAge != 1.0 {
+		t.Errorf("DiffAge = %f, want 1.0", nmea.DiffAge)
+	}
+	// DiffStationID = "0003" (field 13 in the sentence)
+	if nmea.DiffStationID != "0003" {
+		t.Errorf("DiffStationID = %q, want 0003", nmea.DiffStationID)
+	}
 }
 
 func TestParseGGASentence_NoFix(t *testing.T) {
@@ -1274,6 +1282,13 @@ func TestParseGGASentence_NoFix(t *testing.T) {
 	}
 	if nmea.NumSatellites != 0 {
 		t.Errorf("NumSatellites = %d, want 0", nmea.NumSatellites)
+	}
+	// DiffAge should be -1 (not present in this sentence)
+	if nmea.DiffAge != -1 {
+		t.Errorf("DiffAge = %f, want -1 (not present)", nmea.DiffAge)
+	}
+	if nmea.DiffStationID != "" {
+		t.Errorf("DiffStationID = %q, want empty", nmea.DiffStationID)
 	}
 }
 

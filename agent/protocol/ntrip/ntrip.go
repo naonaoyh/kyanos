@@ -171,6 +171,8 @@ type NTRIPNMEASentence struct {
 	NumSatellites int     // Number of satellites in use
 	HDOP          float64 // Horizontal dilution of precision
 	Altitude      float64 // Antenna altitude above MSL (metres)
+	DiffAge       float64 // Age of differential GPS data in seconds (-1 if not present)
+	DiffStationID string  // Differential reference station ID (empty if not present)
 }
 
 func (s *NTRIPNMEASentence) IsReq() bool                 { return true }
@@ -191,6 +193,12 @@ func (s *NTRIPNMEASentence) FormatToString() string {
 		}
 		if s.Altitude != 0 {
 			result += fmt.Sprintf("\n  Altitude:     %.1f m", s.Altitude)
+		}
+		if s.DiffAge >= 0 {
+			result += fmt.Sprintf("\n  Diff Age:     %.1f s", s.DiffAge)
+		}
+		if s.DiffStationID != "" {
+			result += fmt.Sprintf("\n  Diff Station: %s", s.DiffStationID)
 		}
 	}
 	return result
@@ -1052,6 +1060,8 @@ func parseBasicAuth(header string) (username, password string, ok bool) {
 //	 9: Altitude units (M)
 //	10: Geoid separation
 //	11: Geoid units
+//	12: Age of differential GPS data (seconds)
+//	13: Differential reference station ID
 func parseGGASentence(sentence string, nmea *NTRIPNMEASentence) {
 	// Strip checksum part for field parsing
 	raw := sentence
@@ -1072,6 +1082,7 @@ func parseGGASentence(sentence string, nmea *NTRIPNMEASentence) {
 
 	nmea.GGAParsed = true
 	nmea.UTCTime = fields[0]
+	nmea.DiffAge = -1 // default: not present
 
 	// Parse latitude: ddmm.mmmm
 	if lat, err := parseNMEACoord(fields[1], fields[2]); err == nil {
@@ -1103,6 +1114,18 @@ func parseGGASentence(sentence string, nmea *NTRIPNMEASentence) {
 		if alt, err := strconv.ParseFloat(fields[8], 64); err == nil {
 			nmea.Altitude = alt
 		}
+	}
+
+	// Age of differential GPS data (field 12, optional)
+	if len(fields) > 12 && fields[12] != "" {
+		if age, err := strconv.ParseFloat(fields[12], 64); err == nil {
+			nmea.DiffAge = age
+		}
+	}
+
+	// Differential reference station ID (field 13, optional)
+	if len(fields) > 13 && fields[13] != "" {
+		nmea.DiffStationID = fields[13]
 	}
 }
 
