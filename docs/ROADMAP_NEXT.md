@@ -571,3 +571,41 @@ T1b / T6 / T7 标记为 ⚠️LINUX，待环境恢复
   当前在 TUI 退出后/非 TUI 模式下输出最清晰。后续若要"实时"在 TUI 内展示，需
   render 层集成（更大改动，未做）。
 - 仅文本输出；JSONL/HTML 报告导出属 Phase 6。
+
+### P6-JSONL — 结构化 JSONL 会话导出 ✅ 已完成 (2026-06-03)
+
+> Phase 6 的第一块（DEVELOPMENT_PLAN §6.2）。给诊断引擎补上**机器可读**输出通道
+> （TR 是人类可读文本），作为后续 Web Console / 告警 / 看板的数据基础。纯 Go、可测，
+> 与 TR 复用同一套会话字段读取约定。
+
+- `agent/session/jsonl.go`（新建）：
+  - `SessionSummaryJSON`：扁平、自包含的会话 JSON 视图（snake_case 字段），覆盖
+    身份 / 登录 / GGA / RTCM（含 msg-type 直方图） / 网络 / 断连 / 诊断评分 + issues。
+  - `SessionSummaryFromSession(s, cfg)` / `MarshalSessionSummaryLine(s, cfg)`：
+    构建与单行序列化。
+  - `JSONLExporter`：线程安全（`sync.Mutex`）的 JSON Lines 写入器，支持文件
+    （`NewJSONLExporter`，拥有并负责 Close）或任意 `io.Writer`
+    （`NewJSONLExporterWriter`，用于测试/stdout，Close 不关闭底层）。
+  - `JSONLReporter`（实现 `SessionListener`）：会话关闭时写一行，错误吞掉（best-effort）。
+- **安全**：JSONL feed **永不包含密码**，即使 `ReportConfig.ShowPassword=true`
+  （结构化数据下游可能落库/外传，凭据不应进入）。已用测试固化此约束。
+- 接线：`agent/common/options.go` 新增 `SessionJSONLPath`；`agent.go` 在
+  `--diag` 且路径非空时创建 exporter、注册 reporter、并在退出时 Close（带错误日志）；
+  `cmd/common.go` 新增 `--diag-jsonl <path>` flag。
+- 新增 `jsonl_test.go`：8 个测试（字段映射、密码绝不出现、单行合法 JSON、
+  exporter 一会话一行、writer-backed Path/Close、reporter 关闭时导出/创建不导出、
+  nil exporter 安全）。
+- 验证：`GOOS=linux go build ./...`（cgo stub）、`go vet`（session/agent/cmd）、
+  `go test -c ./agent/session/` 全过；新文件 gofmt 干净。
+
+#### Phase 6 剩余（未做）
+
+- PCAP 合成导出（需真实包数据才有意义，⚠️建议 Linux 环境验证）
+- 腾讯云 COS 上传（需 SDK + 凭据 + 网络）
+- 文件轮转（按大小/时间切割）
+
+完整用法：
+```bash
+sudo kyanos watch ntrip --diag --diag-jsonl sessions.jsonl
+sudo kyanos watch ntrip --diag --diag-report --diag-jsonl out.jsonl --pod-load
+```

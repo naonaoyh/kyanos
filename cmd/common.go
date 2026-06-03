@@ -168,6 +168,9 @@ func initSessionDiagnosis(cmd *cobra.Command) {
 	if rep, err := cmd.Flags().GetBool("diag-report"); err == nil && rep {
 		options.SessionReportEnable = true
 	}
+	if path, err := cmd.Flags().GetString("diag-jsonl"); err == nil && path != "" {
+		options.SessionJSONLPath = path
+	}
 }
 
 // applyLeapSeconds reads the --leap-seconds flag (if registered) and overrides
@@ -203,6 +206,8 @@ func addSessionDiagnosisFlags(cmd *cobra.Command) {
 		"Enable multi-Pod load analysis (per-Pod connections/frame-rate, stickiness, imbalance) (requires --diag)")
 	cmd.Flags().Bool("diag-report", false,
 		"Print a per-session diagnostic report (login/GGA/RTCM/network/score) when each session closes (requires --diag)")
+	cmd.Flags().String("diag-jsonl", "",
+		"Export one structured session-summary JSON object per line to this file as sessions close (requires --diag)")
 	cmd.Flags().Int("leap-seconds", 0,
 		"Override the GPS-UTC leap second offset for RTCM epoch latency (0 = use built-in default 18)")
 }

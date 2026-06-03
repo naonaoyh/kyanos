@@ -88,6 +88,7 @@ func SetupAgent(options ac.AgentOptions) {
 	// when off, behaviour is identical to upstream kyanos.
 	var sessionTracker *session.SessionTracker
 	var podLoadAnalyzer *session.PodLoadAnalyzer
+	var jsonlExporter *session.JSONLExporter
 	if options.SessionDiagnosisEnable {
 		sessionTracker = session.NewSessionTracker(options.SessionTrackerConfig)
 		correlator := session.NewSessionCorrelator(options.SessionTrackerConfig.Correlator)
@@ -102,18 +103,30 @@ func SetupAgent(options ac.AgentOptions) {
 			podLoadAnalyzer = session.NewPodLoadAnalyzer()
 			sessionTracker.AddListener(podLoadAnalyzer)
 		}
+		reportCfg := session.ReportConfig{
+			GGAWarnInterval:  options.SessionTrackerConfig.GGAWarnInterval,
+			RTCMWarnInterval: options.SessionTrackerConfig.RTCMWarnInterval,
+			ShowPassword:     options.SessionTrackerConfig.Visibility.ShowPassword,
+		}
 		if options.SessionReportEnable {
 			// DiagnosticReporter prints a per-session diagnostic report (login/
 			// GGA/RTCM/network/score) to the agent log when each session closes.
-			reportCfg := session.ReportConfig{
-				GGAWarnInterval:  options.SessionTrackerConfig.GGAWarnInterval,
-				RTCMWarnInterval: options.SessionTrackerConfig.RTCMWarnInterval,
-				ShowPassword:     options.SessionTrackerConfig.Visibility.ShowPassword,
-			}
 			reporter := session.NewDiagnosticReporter(reportCfg, func(report string) {
 				common.AgentLog.Infof("\n%s", report)
 			})
 			sessionTracker.AddListener(reporter)
+		}
+		if options.SessionJSONLPath != "" {
+			// JSONLReporter writes one structured session-summary JSON object per
+			// line as sessions close, for downstream tooling / offline analysis.
+			exp, err := session.NewJSONLExporter(options.SessionJSONLPath)
+			if err != nil {
+				common.AgentLog.Errorf("failed to create JSONL export %q: %v", options.SessionJSONLPath, err)
+			} else {
+				jsonlExporter = exp
+				sessionTracker.AddListener(session.NewJSONLReporter(exp, reportCfg))
+				common.AgentLog.Infof("session JSONL export enabled: %s", options.SessionJSONLPath)
+			}
 		}
 		common.AgentLog.Info("NTRIP/RTCM session diagnosis enabled")
 	}
@@ -239,6 +252,13 @@ func SetupAgent(options ac.AgentOptions) {
 	if podLoadAnalyzer != nil {
 		common.SetLogToStdout()
 		common.AgentLog.Infof("\n%s", session.FormatPodLoadSummary(podLoadAnalyzer))
+	}
+
+	// Flush and close the JSONL export, if enabled.
+	if jsonlExporter != nil {
+		if err := jsonlExporter.Close(); err != nil {
+			common.AgentLog.Warnf("failed to close JSONL export: %v", err)
+		}
 	}
 
 	common.AgentLog.Infoln("Kyanos Stopped: ", stop)

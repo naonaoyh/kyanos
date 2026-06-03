@@ -71,6 +71,10 @@ type AgentOptions struct {
 	// diagnostic report when each session closes. Only consulted when
 	// SessionDiagnosisEnable is true.
 	SessionReportEnable bool
+	// SessionJSONLPath, when non-empty, enables structured JSONL export: one
+	// session-summary JSON object per line is written to this file as sessions
+	// close. Only consulted when SessionDiagnosisEnable is true.
+	SessionJSONLPath string
 
 	FilterComm              string
 	ProcessExecEventChannel chan *bpf.AgentProcessExecEvent
