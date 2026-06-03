@@ -84,6 +84,15 @@ func init() {
 		}
 		return "_not_a_ntrip_req_", nil
 	}
+	classfierMap[anc.NTRIPUser] = func(ar *anc.AnnotatedRecord) (anc.ClassId, error) {
+		if req, ok := ar.Record.Request().(*ntrip.NTRIPRequest); ok {
+			if req.Username == "" {
+				return "_anonymous_", nil
+			}
+			return anc.ClassId(req.Username), nil
+		}
+		return "_not_a_ntrip_req_", nil
+	}
 
 	classfierMap[anc.ProtocolAdaptive] = func(ar *anc.AnnotatedRecord) (anc.ClassId, error) {
 		redisReq, ok := ar.Record.Request().(*protocol.RedisMessage)
@@ -154,6 +163,15 @@ func init() {
 	classIdHumanReadableMap[anc.NTRIPSessionType] = func(ar *anc.AnnotatedRecord) string {
 		if req, ok := ar.Record.Request().(*ntrip.NTRIPRequest); ok {
 			return req.SessionType.String()
+		}
+		return "_not_a_ntrip_req_"
+	}
+	classIdHumanReadableMap[anc.NTRIPUser] = func(ar *anc.AnnotatedRecord) string {
+		if req, ok := ar.Record.Request().(*ntrip.NTRIPRequest); ok {
+			if req.Username == "" {
+				return "_anonymous_"
+			}
+			return req.Username
 		}
 		return "_not_a_ntrip_req_"
 	}

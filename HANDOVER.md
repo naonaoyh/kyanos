@@ -73,10 +73,20 @@ Phase 5 包含 6 个排障场景 (S1-S6) + 诊断评分 + CLI 集成:
 | S3 | RTCM 播发连续性分析 | **已完成** | `session/types.go` (RTCMEvent, RTCMDeliveryStats) |
 | S4 | 网络切换与断连分析 | **已完成** | `session/correlator.go`, `session/types.go` (DisconnectReason) |
 | S5 | TCP 重传/拥塞分析 | **已完成** | `session/tcp_health.go` |
-| S6 | 多 Pod 负载分析 | **未开始** | 计划: `session/pod_load.go` (新建) |
+| S6 | 多 Pod 负载分析 | **基础已完成** | `session/pod_load.go` (PodLoadAnalyzer, 见 ROADMAP_NEXT §10 T4) |
 | — | 诊断评分引擎 | **基础已完成** | `session/types.go` (DiagnosticScore, Score()) |
-| — | CLI flags 集成 | **未开始** | 计划: `cmd/watch.go`, `cmd/stat.go` |
-| — | Tracker-Correlator 完整集成 | **部分** | Tracker.detectKickOut 已实现; Correlator.OnSessionCreated 未挂入 |
+| — | CLI flags 集成 | **基础已完成** | `--diag` 等开关 + `ntrip-user` group-by (见 ROADMAP_NEXT §10 T3); 报告渲染待做 |
+| — | Tracker-Correlator 完整集成 | **已完成** | 通过 `tracker.AddListener(correlator)` 贯通 (见 ROADMAP_NEXT §10 T2) |
+| — | 诊断引擎接入数据流 | **已完成(Go侧+BPF C侧)** | `agent/agent.go` + `agent/session_wiring.go` + BPF `is_ntrip_protocol` (见 ROADMAP_NEXT §10 T0/T1a) |
+
+> **2026-06-03 增补**：继续开发的详细任务重排见 `docs/ROADMAP_NEXT.md`。本轮已完成
+> T0（修复单向 Record 的 nil-Resp panic，Phase 1-4 潜伏崩溃）、T1a（诊断引擎接线 +
+> BPF NTRIP 识别）、T2（Correlator 集成）、T3（CLI flags `--diag` 等 + `ntrip-user`
+> group-by）、T4（S6 多 Pod 负载分析 `pod_load.go` + `--pod-load`）、TR（诊断结果
+> 渲染 `report.go`：`--diag-report` 逐会话报告 + 退出时 Pod 负载汇总）、T5（清理：
+> sort.Slice、闰秒可配置 `--leap-seconds`、scoring.go 拆分+死锁修复、recentRetrans
+> 时间窗口）。Phase 5 的 Windows 可做部分全部完成；剩余仅 ⚠️LINUX 验证项
+> （T1b header-scan、T6 真实构建、T7 e2e）。
 
 ### 3.1 Phase 5 §5.10 交付物清单 (对照)
 

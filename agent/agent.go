@@ -13,6 +13,7 @@ import (
 	loader_render "kyanos/agent/render/loader"
 	"kyanos/agent/render/stat"
 	"kyanos/agent/render/watch"
+	"kyanos/agent/session"
 	"kyanos/bpf"
 	"kyanos/bpf/loader"
 	"kyanos/common"
@@ -82,10 +83,51 @@ func SetupAgent(options ac.AgentOptions) {
 	recordsChannel = make(chan *anc.AnnotatedRecord, 1000)
 
 	pm := conn.InitProcessorManager(options.ProcessorsNum, connManager, options.MessageFilter, options.LatencyFilter, options.SizeFilter, options.TraceSide, options.ConntrackCloseWaitTimeMills)
+
+	// Optional NTRIP/RTCM session diagnostic engine. Disabled by default;
+	// when off, behaviour is identical to upstream kyanos.
+	var sessionTracker *session.SessionTracker
+	var podLoadAnalyzer *session.PodLoadAnalyzer
+	if options.SessionDiagnosisEnable {
+		sessionTracker = session.NewSessionTracker(options.SessionTrackerConfig)
+		correlator := session.NewSessionCorrelator(options.SessionTrackerConfig.Correlator)
+		// SessionCorrelator implements SessionListener, so registering it wires
+		// cross-session reconnection / IP-change detection automatically via the
+		// tracker's create/close notifications.
+		sessionTracker.AddListener(correlator)
+		if options.SessionPodLoadEnable {
+			// PodLoadAnalyzer is also a SessionListener; registering it enables
+			// S6 multi-Pod load aggregation (per-Pod connections/frame-rate,
+			// stickiness, load-imbalance).
+			podLoadAnalyzer = session.NewPodLoadAnalyzer()
+			sessionTracker.AddListener(podLoadAnalyzer)
+		}
+		if options.SessionReportEnable {
+			// DiagnosticReporter prints a per-session diagnostic report (login/
+			// GGA/RTCM/network/score) to the agent log when each session closes.
+			reportCfg := session.ReportConfig{
+				GGAWarnInterval:  options.SessionTrackerConfig.GGAWarnInterval,
+				RTCMWarnInterval: options.SessionTrackerConfig.RTCMWarnInterval,
+				ShowPassword:     options.SessionTrackerConfig.Visibility.ShowPassword,
+			}
+			reporter := session.NewDiagnosticReporter(reportCfg, func(report string) {
+				common.AgentLog.Infof("\n%s", report)
+			})
+			sessionTracker.AddListener(reporter)
+		}
+		common.AgentLog.Info("NTRIP/RTCM session diagnosis enabled")
+	}
+
 	conn.RecordFunc = func(r protocol.Record, c *conn.Connection4) error {
+		if sessionTracker != nil {
+			sessionTracker.OnRecord(r, connInfoFromConnection4(c))
+		}
 		return statRecorder.ReceiveRecord(r, c, recordsChannel)
 	}
 	conn.OnCloseRecordFunc = func(c *conn.Connection4) error {
+		if sessionTracker != nil {
+			sessionTracker.OnConnectionClose(connInfoFromConnection4(c), time.Now(), inferCloseDirection(c))
+		}
 		statRecorder.RemoveRecord(c.TgidFd)
 		return nil
 	}
@@ -192,6 +234,13 @@ func SetupAgent(options ac.AgentOptions) {
 	} else {
 		watch.RunWatchRender(ctx, recordsChannel, options.WatchOptions)
 	}
+
+	// Emit a multi-Pod load summary at shutdown (S6), if enabled.
+	if podLoadAnalyzer != nil {
+		common.SetLogToStdout()
+		common.AgentLog.Infof("\n%s", session.FormatPodLoadSummary(podLoadAnalyzer))
+	}
+
 	common.AgentLog.Infoln("Kyanos Stopped: ", stop)
 
 	return

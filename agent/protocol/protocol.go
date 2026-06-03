@@ -43,6 +43,25 @@ func (r *Record) Response() ParsedMessage {
 	return r.Resp
 }
 
+// IsUnidirectional reports whether the record has no paired response message.
+// This is the case for push-stream protocols such as RTCM and the RTCM/NMEA
+// frames carried inside an NTRIP data stream, where each frame is modelled as
+// a request with no response.
+func (r *Record) IsUnidirectional() bool {
+	return r.Resp == nil
+}
+
+// EffectiveResponse returns the response message, or the request message when
+// the response is nil (unidirectional records). Downstream code that needs a
+// timestamp or byte size for "the response side" should use this to avoid
+// dereferencing a nil ParsedMessage.
+func (r *Record) EffectiveResponse() ParsedMessage {
+	if r.Resp != nil {
+		return r.Resp
+	}
+	return r.Req
+}
+
 type RecordToStringOptions struct {
 	RecordMaxDumpBytes int
 	IncludeReqBody     bool

@@ -417,19 +417,30 @@ func KernEventsToNicEventDetails(kernEvents []conn.KernEvent) []analysisCommon.N
 }
 
 func getParsedMessageBySide(r protocol.Record, IsServerSide bool, direct DirectEnum) protocol.ParsedMessage {
+	var msg protocol.ParsedMessage
 	if !IsServerSide {
 		if direct == DirectEgress {
-			return r.Request()
+			msg = r.Request()
 		} else {
-			return r.Response()
+			msg = r.Response()
 		}
 	} else {
 		if direct == DirectEgress {
-			return r.Response()
+			msg = r.Response()
 		} else {
-			return r.Request()
+			msg = r.Request()
 		}
 	}
+	// Unidirectional records (e.g. RTCM push frames, NTRIP-embedded RTCM/NMEA)
+	// have no paired response. Fall back to the non-nil side so downstream
+	// timestamp/size computations don't dereference a nil ParsedMessage.
+	if msg == nil {
+		if r.Response() != nil {
+			return r.Response()
+		}
+		return r.Request()
+	}
+	return msg
 }
 func (s *StatRecorder) RemoveRecord(tgidFd uint64) {
 }

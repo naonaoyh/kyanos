@@ -713,3 +713,87 @@ func TestClassfierTypeNames_Registered(t *testing.T) {
 		}
 	}
 }
+
+// --- NTRIP User classifier ---
+
+func TestClassfier_NTRIPUser(t *testing.T) {
+	req := &ntrip.NTRIPRequest{
+		FrameBase:   protocol.NewFrameBase(1000, 100, 0),
+		Method:      "GET",
+		Path:        "/RTK_DATA",
+		Version:     ntrip.NTRIPv2,
+		SessionType: ntrip.SessionTypeDataStream,
+		MountPoint:  "RTK_DATA",
+		Username:    "operator01",
+	}
+	ar := makeAnnotatedRecord(req, nil, uint32(bpf.AgentTrafficProtocolTKProtocolNTRIP))
+
+	c := classfierMap[anc.NTRIPUser]
+	id, err := c(ar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "operator01" {
+		t.Errorf("expected 'operator01', got '%s'", id)
+	}
+}
+
+func TestClassfier_NTRIPUser_Anonymous(t *testing.T) {
+	req := &ntrip.NTRIPRequest{
+		FrameBase:   protocol.NewFrameBase(1000, 100, 0),
+		Method:      "GET",
+		Path:        "/RTK_DATA",
+		Version:     ntrip.NTRIPv2,
+		SessionType: ntrip.SessionTypeDataStream,
+		MountPoint:  "RTK_DATA",
+		Username:    "",
+	}
+	ar := makeAnnotatedRecord(req, nil, uint32(bpf.AgentTrafficProtocolTKProtocolNTRIP))
+
+	c := classfierMap[anc.NTRIPUser]
+	id, err := c(ar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "_anonymous_" {
+		t.Errorf("expected '_anonymous_', got '%s'", id)
+	}
+}
+
+func TestClassfier_NTRIPUser_NotNTRIP(t *testing.T) {
+	stub := &stubMessage{isReq: true}
+	ar := makeAnnotatedRecord(stub, nil, 0)
+
+	c := classfierMap[anc.NTRIPUser]
+	id, err := c(ar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "_not_a_ntrip_req_" {
+		t.Errorf("expected '_not_a_ntrip_req_', got '%s'", id)
+	}
+}
+
+func TestClassfier_NTRIPUser_HumanReadable(t *testing.T) {
+	req := &ntrip.NTRIPRequest{
+		FrameBase:   protocol.NewFrameBase(1000, 100, 0),
+		Method:      "GET",
+		Path:        "/RTK_DATA",
+		Version:     ntrip.NTRIPv2,
+		SessionType: ntrip.SessionTypeDataStream,
+		MountPoint:  "RTK_DATA",
+		Username:    "operator01",
+	}
+	ar := makeAnnotatedRecord(req, nil, uint32(bpf.AgentTrafficProtocolTKProtocolNTRIP))
+
+	f := classIdHumanReadableMap[anc.NTRIPUser]
+	if got := f(ar); got != "operator01" {
+		t.Errorf("expected 'operator01', got '%s'", got)
+	}
+}
+
+func TestClassfierTypeName_NTRIPUser(t *testing.T) {
+	if name, ok := anc.ClassfierTypeNames[anc.NTRIPUser]; !ok || name != "ntrip-user" {
+		t.Errorf("expected ClassfierTypeNames[NTRIPUser]='ntrip-user', got '%s' (ok=%v)", name, ok)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"kyanos/agent/metadata"
 	"kyanos/agent/protocol"
 	"kyanos/agent/render/watch"
+	"kyanos/agent/session"
 	"kyanos/bpf"
 	"kyanos/common"
 	"os"
@@ -54,6 +55,22 @@ type AgentOptions struct {
 	// RecordExportFunc is called for every parsed record before filtering.
 	// Used for RTCM data export: writes raw frames to .rtcm files.
 	RecordExportFunc func(record protocol.Record)
+
+	// SessionDiagnosisEnable turns on the NTRIP/RTCM session-level diagnostic
+	// engine (agent/session). When false, the tracker is never constructed and
+	// behaviour is identical to upstream kyanos.
+	SessionDiagnosisEnable bool
+	// SessionTrackerConfig tunes the diagnostic engine. Only consulted when
+	// SessionDiagnosisEnable is true.
+	SessionTrackerConfig session.TrackerConfig
+	// SessionPodLoadEnable attaches a PodLoadAnalyzer (S6 multi-Pod load
+	// analysis) to the tracker. Only consulted when SessionDiagnosisEnable is
+	// true.
+	SessionPodLoadEnable bool
+	// SessionReportEnable attaches a DiagnosticReporter that prints a per-session
+	// diagnostic report when each session closes. Only consulted when
+	// SessionDiagnosisEnable is true.
+	SessionReportEnable bool
 
 	FilterComm              string
 	ProcessExecEventChannel chan *bpf.AgentProcessExecEvent

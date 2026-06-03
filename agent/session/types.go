@@ -5,6 +5,7 @@ package session
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type NTRIPSession struct {
 	ClientPort   uint16
 	ServerPod    string // DS Pod handling this connection (empty if not in K8s mode)
 	ServerNode   string // Node where DS Pod runs
+	ServerIP     string // Server-side IP; used as pod-load fallback key when ServerPod is empty
 
 	// Connection timing
 	ConnStartTime time.Time
@@ -102,10 +104,60 @@ func (s *NTRIPSession) IsActive() bool {
 func (s *NTRIPSession) Duration() time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.durationLocked()
+}
+
+// durationLocked returns the session duration. The caller MUST hold s.mu
+// (read or write). Extracted so callers already holding the lock (e.g. Score)
+// don't re-acquire it — RWMutex read locks are not reentrant and re-acquiring
+// while a writer is queued can deadlock.
+func (s *NTRIPSession) durationLocked() time.Duration {
 	if s.ConnCloseTime != nil {
 		return s.ConnCloseTime.Sub(s.ConnStartTime)
 	}
 	return time.Since(s.ConnStartTime)
+}
+
+// RTCMFrameCount returns the number of RTCM frames observed so far. Unlike
+// RTCMStats.TotalFrames (which is only finalized on Close), this live counter
+// is valid for active sessions too, so aggregators such as PodLoadAnalyzer can
+// compute frame rates while sessions are still running.
+func (s *NTRIPSession) RTCMFrameCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.rtcmFrameCount
+}
+
+// RTCMTotalBytes returns the total RTCM payload bytes observed so far (live).
+func (s *NTRIPSession) RTCMTotalBytes() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.rtcmTotalBytes
+}
+
+// RTCMFrameRate returns the average RTCM frames-per-second over the session's
+// duration so far. Returns 0 when the duration is non-positive or no frames
+// have been seen.
+func (s *NTRIPSession) RTCMFrameRate() float64 {
+	s.mu.RLock()
+	count := s.rtcmFrameCount
+	start := s.ConnStartTime
+	closeTime := s.ConnCloseTime
+	s.mu.RUnlock()
+
+	if count == 0 {
+		return 0
+	}
+	var span time.Duration
+	if closeTime != nil {
+		span = closeTime.Sub(start)
+	} else {
+		span = time.Since(start)
+	}
+	if span <= 0 {
+		return 0
+	}
+	return float64(count) / span.Seconds()
 }
 
 // Close marks the session as closed.
@@ -790,170 +842,15 @@ func DefaultFieldVisibility() FieldVisibility {
 // Diagnostic scoring
 // ---------------------------------------------------------------------------
 
-// DiagnosticScore holds the per-dimension scores for a session.
-type DiagnosticScore struct {
-	Total          int // 0-100
-	LoginScore     int // 0-100
-	GGAScore       int // 0-100
-	RTCMScore      int // 0-100
-	NetworkScore   int // 0-100
-	StabilityScore int // 0-100
-	Issues         []DiagnosticIssue
-}
-
-// DiagnosticIssue describes a single detected problem.
-type DiagnosticIssue struct {
-	Category    string // "login", "gga", "rtcm", "network", "stability"
-	Severity    string // "warning", "error", "critical"
-	Description string
-	Timestamp   time.Time // when the issue occurred (zero if N/A)
-}
-
-// Score computes the diagnostic score for a session.
-func (s *NTRIPSession) Score(ggaWarnInterval, rtcmWarnInterval time.Duration) DiagnosticScore {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	score := DiagnosticScore{
-		LoginScore:     100,
-		GGAScore:       100,
-		RTCMScore:      100,
-		NetworkScore:   100,
-		StabilityScore: 100,
-	}
-
-	// Login scoring
-	if s.AuthChecked && !s.AuthSuccess {
-		score.LoginScore -= 100
-		score.Issues = append(score.Issues, DiagnosticIssue{
-			Category:    "login",
-			Severity:    "critical",
-			Description: fmt.Sprintf("Authentication failed (HTTP %d)", s.HTTPStatusCode),
-		})
-	}
-	if s.LoginLatency > 5*time.Second {
-		score.LoginScore -= 30
-		score.Issues = append(score.Issues, DiagnosticIssue{
-			Category:    "login",
-			Severity:    "warning",
-			Description: fmt.Sprintf("Login latency %.1fs exceeds 5s threshold", s.LoginLatency.Seconds()),
-			Timestamp:   s.ConnStartTime,
-		})
-	}
-
-	// GGA scoring
-	ggaAnomalies := 0
-	for _, e := range s.GGAEvents {
-		if e.Interval > ggaWarnInterval {
-			ggaAnomalies++
-			score.GGAScore -= 3
-		}
-	}
-	if ggaAnomalies > 0 {
-		score.Issues = append(score.Issues, DiagnosticIssue{
-			Category:    "gga",
-			Severity:    "warning",
-			Description: fmt.Sprintf("%d GGA interval anomalies (threshold %s)", ggaAnomalies, ggaWarnInterval),
-		})
-	}
-	if len(s.GGAEvents) == 0 && s.Duration() > 30*time.Second {
-		score.GGAScore -= 20
-		score.Issues = append(score.Issues, DiagnosticIssue{
-			Category:    "gga",
-			Severity:    "warning",
-			Description: "No GGA uploads detected during session",
-		})
-	}
-
-	// RTCM scoring
-	for _, intr := range s.RTCMStats.Interruptions {
-		if intr.Duration > rtcmWarnInterval {
-			score.RTCMScore -= 5
-			score.Issues = append(score.Issues, DiagnosticIssue{
-				Category:    "rtcm",
-				Severity:    "warning",
-				Description: fmt.Sprintf("RTCM interruption %.1fs at %s", intr.Duration.Seconds(), intr.StartTime.Format(time.RFC3339)),
-				Timestamp:   intr.StartTime,
-			})
-		}
-	}
-	if s.RTCMStats.CRCErrorRate > 0.01 {
-		score.RTCMScore -= 10
-		score.Issues = append(score.Issues, DiagnosticIssue{
-			Category:    "rtcm",
-			Severity:    "error",
-			Description: fmt.Sprintf("CRC error rate %.2f%% exceeds 1%%", s.RTCMStats.CRCErrorRate*100),
-		})
-	}
-
-	// Network scoring
-	if s.NetworkQuality.RetransmissionRate > 0.01 {
-		score.NetworkScore -= 5
-		score.Issues = append(score.Issues, DiagnosticIssue{
-			Category:    "network",
-			Severity:    "warning",
-			Description: fmt.Sprintf("TCP retransmission rate %.2f%%", s.NetworkQuality.RetransmissionRate*100),
-		})
-	}
-	if s.NetworkQuality.P95RTT > 50*time.Millisecond {
-		score.NetworkScore -= 5
-		score.Issues = append(score.Issues, DiagnosticIssue{
-			Category:    "network",
-			Severity:    "warning",
-			Description: fmt.Sprintf("RTT P95 %.1fms exceeds 50ms", float64(s.NetworkQuality.P95RTT)/float64(time.Millisecond)),
-		})
-	}
-
-	// Stability scoring
-	if s.ConnCloseTime != nil && s.Duration() < 10*time.Second {
-		score.StabilityScore -= 10
-		score.Issues = append(score.Issues, DiagnosticIssue{
-			Category:    "stability",
-			Severity:    "warning",
-			Description: fmt.Sprintf("Short-lived session: %.1fs", s.Duration().Seconds()),
-			Timestamp:   s.ConnStartTime,
-		})
-	}
-	for _, rst := range s.NetworkQuality.TCPResetEvents {
-		score.StabilityScore -= 5
-		score.Issues = append(score.Issues, DiagnosticIssue{
-			Category:    "stability",
-			Severity:    "warning",
-			Description: fmt.Sprintf("TCP reset (%s) at %s", rst.Direction, rst.Timestamp.Format(time.RFC3339)),
-			Timestamp:   rst.Timestamp,
-		})
-	}
-
-	// Clamp scores to [0, 100]
-	score.LoginScore = clampInt(score.LoginScore, 0, 100)
-	score.GGAScore = clampInt(score.GGAScore, 0, 100)
-	score.RTCMScore = clampInt(score.RTCMScore, 0, 100)
-	score.NetworkScore = clampInt(score.NetworkScore, 0, 100)
-	score.StabilityScore = clampInt(score.StabilityScore, 0, 100)
-
-	// Weighted total
-	score.Total = score.LoginScore*15/100 +
-		score.GGAScore*20/100 +
-		score.RTCMScore*35/100 +
-		score.NetworkScore*20/100 +
-		score.StabilityScore*10/100
-
-	return score
-}
+// ---------------------------------------------------------------------------
+// Diagnostic scoring
+// ---------------------------------------------------------------------------
+//
+// The scoring types and the Score() method live in scoring.go.
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
 
 func maxDuration(a, b time.Duration) time.Duration {
 	if a > b {
@@ -962,18 +859,12 @@ func maxDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
-// sortDurations sorts a slice of durations in ascending order (insertion sort
-// for simplicity; swap to sort.Slice for large N if needed).
+// sortDurations sorts a slice of durations in ascending order. Uses the stdlib
+// pattern-defeating quicksort (sort.Slice), which is O(n log n) and well-suited
+// to the larger sample sets (RTT/interval histograms) collected over long-lived
+// sessions.
 func sortDurations(d []time.Duration) {
-	for i := 1; i < len(d); i++ {
-		key := d[i]
-		j := i - 1
-		for j >= 0 && d[j] > key {
-			d[j+1] = d[j]
-			j--
-		}
-		d[j+1] = key
-	}
+	sort.Slice(d, func(i, j int) bool { return d[i] < d[j] })
 }
 
 // Haversine computes the great-circle distance in metres between two

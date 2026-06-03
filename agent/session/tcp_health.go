@@ -598,6 +598,35 @@ func (a *TCPHealthAnalyzer) RetransmissionEvents() []RetransmissionEvent {
 	return result
 }
 
+// RetransmissionsInWindow returns the number of retransmissions whose timestamp
+// falls within [end-window, end]. Used to classify a server-side disconnect as
+// an RTCM retransmission abort based on recent congestion rather than the
+// session's lifetime total. A non-positive window counts all retransmissions
+// up to end.
+func (a *TCPHealthAnalyzer) RetransmissionsInWindow(end time.Time, window time.Duration) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if window <= 0 {
+		count := 0
+		for _, e := range a.retransmissions {
+			if !e.Timestamp.After(end) {
+				count++
+			}
+		}
+		return count
+	}
+
+	start := end.Add(-window)
+	count := 0
+	for _, e := range a.retransmissions {
+		if !e.Timestamp.Before(start) && !e.Timestamp.After(end) {
+			count++
+		}
+	}
+	return count
+}
+
 // WindowShrinkEvents returns a copy of all window shrink events.
 func (a *TCPHealthAnalyzer) WindowShrinkEvents() []WindowShrinkEvent {
 	a.mu.RLock()

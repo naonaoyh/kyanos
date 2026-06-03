@@ -37,10 +37,36 @@ const GPSHourMs int64 = 3_600_000
 // GLONASSDayMs is the number of milliseconds in one GLONASS day.
 const GLONASSDayMs int64 = 86_400_000
 
-// LeapSecondsGPSUTC is the current GPS-UTC leap second offset.
+// LeapSecondsGPSUTC is the default GPS-UTC leap second offset.
 // As of 2024, GPS time = UTC time + 18 seconds.
-// This value must be updated when new leap seconds are announced.
+// This is the compile-time default; use SetLeapSeconds to override at runtime
+// when a new leap second is announced (avoids needing a rebuild).
 const LeapSecondsGPSUTC = 18
+
+// leapSeconds holds the active GPS-UTC leap second offset. It defaults to
+// LeapSecondsGPSUTC and can be changed via SetLeapSeconds. All epoch->UTC
+// conversions read this value, so updating it takes effect immediately.
+var leapSeconds = LeapSecondsGPSUTC
+
+// SetLeapSeconds overrides the active GPS-UTC leap second offset (in seconds).
+// Negative values are ignored. Intended to be called once at startup from a
+// CLI/config option when the built-in default is stale.
+func SetLeapSeconds(seconds int) {
+	if seconds < 0 {
+		return
+	}
+	leapSeconds = seconds
+}
+
+// LeapSeconds returns the active GPS-UTC leap second offset (in seconds).
+func LeapSeconds() int {
+	return leapSeconds
+}
+
+// leapSecondsDuration returns the active leap-second offset as a time.Duration.
+func leapSecondsDuration() time.Duration {
+	return time.Duration(leapSeconds) * time.Second
+}
 
 // ExtractEpochMs extracts the epoch time from an RTCM frame's raw bytes.
 //
@@ -135,13 +161,13 @@ func msmEpochToUTC(epochMs int64, captureUTC time.Time) time.Time {
 		time.Duration(epochMs)*time.Millisecond)
 
 	// Convert GPS time → UTC by subtracting leap seconds
-	return gpsTime.Add(-LeapSecondsGPSUTC * time.Second)
+	return gpsTime.Add(-leapSecondsDuration())
 }
 
 // gpsLegacyEpochToUTC converts GPS legacy epoch (ms in GPS hour) to UTC.
 func gpsLegacyEpochToUTC(epochMs int64, captureUTC time.Time) time.Time {
 	// Determine the GPS hour of the capture time
-	captureGPS := captureUTC.Add(LeapSecondsGPSUTC * time.Second)
+	captureGPS := captureUTC.Add(leapSecondsDuration())
 	d := captureGPS.Sub(gpsEpoch)
 	gpsHourStart := (d / (time.Duration(GPSHourMs) * time.Millisecond)) *
 		time.Duration(GPSHourMs) * time.Millisecond
@@ -149,12 +175,12 @@ func gpsLegacyEpochToUTC(epochMs int64, captureUTC time.Time) time.Time {
 	gpsTime := gpsEpoch.Add(gpsHourStart + time.Duration(epochMs)*time.Millisecond)
 
 	// Check if the epoch is "ahead" of the capture (unlikely but handle wrap)
-	if gpsTime.After(captureUTC.Add(LeapSecondsGPSUTC * time.Second).Add(time.Hour)) {
+	if gpsTime.After(captureUTC.Add(leapSecondsDuration()).Add(time.Hour)) {
 		// Probably in the previous hour
 		gpsTime = gpsTime.Add(-time.Duration(GPSHourMs) * time.Millisecond)
 	}
 
-	return gpsTime.Add(-LeapSecondsGPSUTC * time.Second)
+	return gpsTime.Add(-leapSecondsDuration())
 }
 
 // glonassLegacyEpochToUTC converts GLONASS legacy epoch (ms in GLONASS day) to UTC.

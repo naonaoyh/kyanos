@@ -13,6 +13,7 @@ var ClassfierTypeNames = map[ClassfierType]string{
 	RTCMConstellation: "rtcm-constellation",
 	NTRIPMountPoint:   "ntrip-mount",
 	NTRIPSessionType:  "ntrip-session",
+	NTRIPUser:         "ntrip-user",
 	ProtocolAdaptive:  "protocol-adaptive",
 	Default:           "default",
 }
@@ -39,6 +40,7 @@ const (
 	// NTRIP v1/v2 protocol
 	NTRIPMountPoint  // Group by NTRIP mountpoint name
 	NTRIPSessionType // Group by NTRIP session type (DataStream, SourcePush, Sourcetable)
+	NTRIPUser        // Group by NTRIP authenticated username
 
 	ProtocolAdaptive
 )

@@ -5,8 +5,11 @@ import (
 	"kyanos/agent"
 	ac "kyanos/agent/common"
 	"kyanos/agent/protocol"
+	"kyanos/agent/protocol/rtcm"
+	"kyanos/agent/session"
 	"kyanos/common"
 	"os"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/jefurry/logrus"
@@ -127,6 +130,81 @@ func initSizeFilter(cmd *cobra.Command) protocol.SizeFilter {
 		MinRespSize: respSizeLimit,
 	}
 	return sizeFilter
+}
+
+// initSessionDiagnosis reads the shared session-diagnosis flags (registered by
+// addSessionDiagnosisFlags) and, when --diag is set, enables the NTRIP/RTCM
+// session diagnostic engine on the global options with a tuned TrackerConfig.
+//
+// When --diag is not set, options.SessionDiagnosisEnable stays false and the
+// agent behaves exactly like upstream kyanos.
+func initSessionDiagnosis(cmd *cobra.Command) {
+	diag, _ := cmd.Flags().GetBool("diag")
+	if !diag {
+		return
+	}
+
+	cfg := session.DefaultTrackerConfig()
+
+	if v, err := cmd.Flags().GetDuration("gga-interval-warn"); err == nil && v > 0 {
+		cfg.GGAWarnInterval = v
+	}
+	if v, err := cmd.Flags().GetDuration("rtcm-interruption-warn"); err == nil && v > 0 {
+		cfg.RTCMWarnInterval = v
+	}
+	if v, err := cmd.Flags().GetDuration("reconnect-window"); err == nil && v > 0 {
+		cfg.Correlator.ReconnectWindow = v
+	}
+	if tcp, err := cmd.Flags().GetBool("tcp-health"); err == nil && tcp {
+		cfg.EnableTCPHealth = true
+	}
+
+	options.SessionDiagnosisEnable = true
+	options.SessionTrackerConfig = cfg
+
+	if pl, err := cmd.Flags().GetBool("pod-load"); err == nil && pl {
+		options.SessionPodLoadEnable = true
+	}
+	if rep, err := cmd.Flags().GetBool("diag-report"); err == nil && rep {
+		options.SessionReportEnable = true
+	}
+}
+
+// applyLeapSeconds reads the --leap-seconds flag (if registered) and overrides
+// the RTCM GPS-UTC leap second offset used for epoch->UTC latency conversion.
+// A value <= 0 leaves the built-in default in place. Applied independently of
+// --diag because it affects RTCM epoch latency whenever diagnostics run.
+func applyLeapSeconds(cmd *cobra.Command) {
+	if cmd.Flags().Lookup("leap-seconds") == nil {
+		return
+	}
+	if ls, err := cmd.Flags().GetInt("leap-seconds"); err == nil && ls > 0 {
+		rtcm.SetLeapSeconds(ls)
+	}
+}
+
+// addSessionDiagnosisFlags registers the shared session-diagnosis flags on a
+// command. Shared by the ntrip and rtcm subcommands so both can drive the
+// diagnostic engine with identical flag names.
+func addSessionDiagnosisFlags(cmd *cobra.Command) {
+	cmd.Flags().Bool("diag", false,
+		"Enable the NTRIP/RTCM session diagnostic engine (login/GGA/RTCM/network analysis)")
+	cmd.Flags().Duration("gga-interval-warn", 5*time.Second,
+		"GGA upload interval threshold for anomaly detection (requires --diag)")
+	cmd.Flags().Duration("rtcm-interruption-warn", 2*time.Second,
+		"RTCM frame gap threshold for interruption detection (requires --diag)")
+	cmd.Flags().Bool("reconnect-detect", false,
+		"Detect client reconnections / IP changes across sessions (requires --diag)")
+	cmd.Flags().Duration("reconnect-window", 60*time.Second,
+		"Max gap between disconnect and reconnect to correlate as a reconnection (requires --diag)")
+	cmd.Flags().Bool("tcp-health", false,
+		"Attach a per-session TCP health analyzer (retransmissions/RTT/window) (requires --diag)")
+	cmd.Flags().Bool("pod-load", false,
+		"Enable multi-Pod load analysis (per-Pod connections/frame-rate, stickiness, imbalance) (requires --diag)")
+	cmd.Flags().Bool("diag-report", false,
+		"Print a per-session diagnostic report (login/GGA/RTCM/network/score) when each session closes (requires --diag)")
+	cmd.Flags().Int("leap-seconds", 0,
+		"Override the GPS-UTC leap second offset for RTCM epoch latency (0 = use built-in default 18)")
 }
 
 func InitLog() {

@@ -373,6 +373,70 @@ static __always_inline enum message_type_t is_rtcm_protocol(const char *old_buf,
 }
 
 
+// NTRIP protocol detection (Networked Transport of RTCM via Internet Protocol).
+//
+// NTRIP runs on top of HTTP, so this detector MUST be placed BEFORE
+// is_http_protocol() in the inference chain; otherwise generic HTTP detection
+// would claim NTRIP traffic first.
+//
+// Detected markers (prefix-based, unambiguous — cheap and verifier-friendly):
+//   Request  side: "SOURCE "      → NTRIP v1 source push
+//   Response side: "ICY "         → NTRIP v1 data stream success line
+//   Response side: "SOURCETABLE " → NTRIP sourcetable listing
+//
+// KNOWN LIMITATION (deferred, see docs/ROADMAP_NEXT.md §3.4):
+//   NTRIP v1 client data requests ("GET /mount HTTP/1.1") and all of NTRIP v2
+//   (standard HTTP/1.1 + "Ntrip-Version: Ntrip/2.0" header, "gnss/data"
+//   content type) are byte-identical to plain HTTP at the prefix level.
+//   Distinguishing them requires scanning the header block for the
+//   "Ntrip-Version" / "gnss/data" needles, which is a bounded-loop scan whose
+//   eBPF-verifier cost must be validated on a real kernel before enabling.
+//   Until then those connections are detected as HTTP. The unambiguous markers
+//   above still let the user-space NTRIP parser take over v1 source/ICY/
+//   sourcetable sessions, and the response side ("ICY") of a v1 client data
+//   session is enough to classify the whole connection as NTRIP.
+static __always_inline enum message_type_t is_ntrip_protocol(const char *old_buf, size_t count) {
+  if (count < 4) {
+    return kUnknown;
+  }
+
+  char buf4[4] = {};
+  bpf_probe_read_user(buf4, 4, old_buf);
+
+  // "ICY " — NTRIP v1 data stream response status line.
+  if (buf4[0] == 'I' && buf4[1] == 'C' && buf4[2] == 'Y' && buf4[3] == ' ') {
+    return kResponse;
+  }
+
+  // The remaining markers ("SOURCE ", "SOURCETABLE ") need more bytes.
+  if (count < 7) {
+    return kUnknown;
+  }
+
+  char buf12[12] = {};
+  // Safe: count >= 7 here. Reading a fixed 12-byte window slightly beyond the
+  // guaranteed minimum mirrors the convention used by is_mongo_protocol().
+  bpf_probe_read_user(buf12, 12, old_buf);
+
+  // "SOURCE " — NTRIP v1 source push request. Index 6 is ' ' for SOURCE but
+  // 'T' for SOURCETABLE, so this check does not collide with the next one.
+  if (buf12[0] == 'S' && buf12[1] == 'O' && buf12[2] == 'U' && buf12[3] == 'R' &&
+      buf12[4] == 'C' && buf12[5] == 'E' && buf12[6] == ' ') {
+    return kRequest;
+  }
+
+  // "SOURCETABLE " — NTRIP sourcetable response.
+  if (count >= 12 &&
+      buf12[0] == 'S' && buf12[1] == 'O' && buf12[2] == 'U' && buf12[3] == 'R' &&
+      buf12[4] == 'C' && buf12[5] == 'E' && buf12[6] == 'T' && buf12[7] == 'A' &&
+      buf12[8] == 'B' && buf12[9] == 'L' && buf12[10] == 'E' && buf12[11] == ' ') {
+    return kResponse;
+  }
+
+  return kUnknown;
+}
+
+
 static __inline enum message_type_t is_dns_protocol(const char* buf, size_t count) {
   const int kDNSHeaderSize = 12;
 
@@ -429,7 +493,13 @@ static __always_inline struct protocol_message_t infer_protocol(const char *buf,
   protocol_message.type = kUnknown;
   conn_info->prepend_length_header = false;
 
-  if (TRACE_PROTOCOL(kProtocolHTTP) && (protocol_message.type = is_http_protocol(buf, count)) != kUnknown) {
+  if (TRACE_PROTOCOL(kProtocolNTRIP) && (protocol_message.type = is_ntrip_protocol(buf, count)) != kUnknown) {
+    // NTRIP must be checked before HTTP: its unambiguous markers (ICY,
+    // SOURCE, SOURCETABLE) would otherwise be missed, and v1 "GET" requests
+    // would be claimed by HTTP. See is_ntrip_protocol() for the known
+    // v2/HTTP-overlap limitation.
+    protocol_message.protocol = kProtocolNTRIP;
+  } else if (TRACE_PROTOCOL(kProtocolHTTP) && (protocol_message.type = is_http_protocol(buf, count)) != kUnknown) {
     protocol_message.protocol = kProtocolHTTP;
   } else if (TRACE_PROTOCOL(kProtocolRTCM) && (protocol_message.type = is_rtcm_protocol(buf, count)) != kUnknown) {
     protocol_message.protocol = kProtocolRTCM;

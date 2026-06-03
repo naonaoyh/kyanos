@@ -41,6 +41,11 @@ type TrackerConfig struct {
 	// RetransAbortThreshold is the minimum retransmission count in the window
 	// before close to classify as DisconnectRTCMAbort.
 	RetransAbortThreshold int
+	// RetransAbortWindow is the time window before connection close over which
+	// retransmissions are counted for the RTCMAbort heuristic. Only used when a
+	// TCPHealthAnalyzer is attached (it has per-event timestamps). When zero,
+	// the analyzer's full retransmission history is used.
+	RetransAbortWindow time.Duration
 	// KickOutWindow is the max time between a new same-username session starting
 	// and the old session closing to classify as DisconnectAccountKickOut.
 	KickOutWindow time.Duration
@@ -65,6 +70,7 @@ func DefaultTrackerConfig() TrackerConfig {
 		RTCMWarnInterval:      2 * time.Second,
 		GGATimeout:            60 * time.Second,
 		RetransAbortThreshold: 5,
+		RetransAbortWindow:    30 * time.Second,
 		KickOutWindow:         10 * time.Second,
 		GGADistanceThreshold:  500.0, // metres
 		Correlator:            DefaultCorrelatorConfig(),
@@ -125,6 +131,17 @@ func (c *ConnInfo) ClientPort() uint16 {
 	return c.LocalPort
 }
 
+// ServerIP returns the server-side IP address based on the connection role.
+// On the server (DS) side this is the local IP; on the client side it is the
+// remote IP. Used by PodLoadAnalyzer as a fallback aggregation key when no
+// K8s Pod name is available.
+func (c *ConnInfo) ServerIP() string {
+	if c.IsServer {
+		return c.LocalIP.String()
+	}
+	return c.RemoteIP.String()
+}
+
 // OnRecord processes a single protocol record, routing it to the appropriate
 // NTRIP session based on message type and connection info.
 func (t *SessionTracker) OnRecord(record protocol.Record, conn *ConnInfo) {
@@ -170,6 +187,20 @@ func (t *SessionTracker) OnConnectionClose(conn *ConnInfo, closeTime time.Time, 
 		s.mu.Lock()
 		s.CloseDirection = direction
 		s.mu.Unlock()
+
+		// Refine recentRetransCount to a time-windowed count when a TCP health
+		// analyzer is attached (it carries per-event timestamps). This replaces
+		// the naive lifetime counter for the RTCMAbort heuristic, so a session
+		// that had old retransmissions but a calm final window isn't misclassified.
+		s.mu.RLock()
+		analyzer := s.TCPAnalyzer
+		s.mu.RUnlock()
+		if analyzer != nil {
+			windowed := analyzer.RetransmissionsInWindow(closeTime, t.config.RetransAbortWindow)
+			s.mu.Lock()
+			s.recentRetransCount = windowed
+			s.mu.Unlock()
+		}
 
 		// Check for account kick-out: same username, another active session
 		kickout := t.detectKickOut(s, closeTime)
@@ -235,7 +266,7 @@ func (t *SessionTracker) sessionKey(clientIP string, clientPort uint16, mountPoi
 }
 
 // getOrCreateSession returns the active session for the given key, or creates one.
-func (t *SessionTracker) getOrCreateSession(clientIP string, clientPort uint16, mountPoint, username string, ts time.Time) *NTRIPSession {
+func (t *SessionTracker) getOrCreateSession(clientIP string, clientPort uint16, mountPoint, username, serverIP string, ts time.Time) *NTRIPSession {
 	key := t.sessionKey(clientIP, clientPort, mountPoint)
 
 	t.mu.RLock()
@@ -257,6 +288,7 @@ func (t *SessionTracker) getOrCreateSession(clientIP string, clientPort uint16, 
 		clientIP, clientPort, mountPoint, ts.UnixMilli())
 
 	s = NewNTRIPSession(sessionID, mountPoint, username, clientIP, clientPort, ts)
+	s.ServerIP = serverIP
 
 	// Attach TCP health analyzer if enabled
 	if t.config.EnableTCPHealth {
@@ -284,7 +316,7 @@ func (t *SessionTracker) handleNTRIPRequest(req *ntrip.NTRIPRequest, resp protoc
 	}
 
 	reqTime := time.Unix(0, int64(req.TimestampNs()))
-	s := t.getOrCreateSession(clientIP, clientPort, mountPoint, req.Username, reqTime)
+	s := t.getOrCreateSession(clientIP, clientPort, mountPoint, req.Username, conn.ServerIP(), reqTime)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -342,7 +374,7 @@ func (t *SessionTracker) handleNMEASentence(nmea *ntrip.NTRIPNMEASentence, conn 
 	s := t.findSessionByClient(clientIP, clientPort)
 	if s == nil {
 		// GGA before login? Create a session anyway
-		s = t.getOrCreateSession(clientIP, clientPort, "_unknown_", "", ts)
+		s = t.getOrCreateSession(clientIP, clientPort, "_unknown_", "", conn.ServerIP(), ts)
 	}
 
 	s.AddGGAEvent(ts, nmea.Latitude, nmea.Longitude,
@@ -358,7 +390,7 @@ func (t *SessionTracker) handleRTCMFrame(frame *rtcm.RTCMFrame, conn *ConnInfo) 
 	s := t.findSessionByClient(clientIP, clientPort)
 	if s == nil {
 		// RTCM without a known session (e.g., direct RTCM stream)
-		s = t.getOrCreateSession(clientIP, clientPort, "direct-rtcm", "", ts)
+		s = t.getOrCreateSession(clientIP, clientPort, "direct-rtcm", "", conn.ServerIP(), ts)
 	}
 
 	// Extract epoch time from RTCM payload for latency tracking

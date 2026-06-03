@@ -71,6 +71,10 @@ Examples:
 			setupRTCMExport(exportPath)
 		}
 
+		// Enable session diagnostics if --diag is specified
+		initSessionDiagnosis(cmd)
+		applyLeapSeconds(cmd)
+
 		startAgent()
 	},
 }
@@ -147,6 +151,7 @@ func init() {
 		"Only show frames with CRC-24Q validation errors")
 	rtcmCmd.Flags().String("export", "",
 		"Export all valid RTCM frames to a .rtcm binary file (for RTKLIB, rtkrcv, convbin)")
+	addSessionDiagnosisFlags(rtcmCmd)
 	rtcmCmd.Flags().SortFlags = false
 	rtcmCmd.PersistentFlags().SortFlags = false
 

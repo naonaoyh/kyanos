@@ -117,6 +117,10 @@ Examples:
 			setupRTCMExport(exportPath)
 		}
 
+		// Enable session diagnostics if --diag is specified
+		initSessionDiagnosis(cmd)
+		applyLeapSeconds(cmd)
+
 		startAgent()
 	},
 }
@@ -170,6 +174,7 @@ func init() {
 		"Only show client GGA position uploads (NMEA backchannel)")
 	ntripCmd.Flags().String("export", "",
 		"Export RTCM frames from NTRIP stream to a .rtcm binary file")
+	addSessionDiagnosisFlags(ntripCmd)
 	ntripCmd.Flags().SortFlags = false
 	ntripCmd.PersistentFlags().SortFlags = false
 

@@ -32,7 +32,7 @@ func (p *RecordsProcessor) Run(recordChannel <-chan RecordWithConn, ticker *time
 			lastProcessIdx := -1
 			now := time.Now().UnixMilli()
 			for idx, record := range p.records {
-				recordMills := common.NanoToMills(record.Response().TimestampNs())
+				recordMills := common.NanoToMills(record.EffectiveResponse().TimestampNs())
 				if float64(now)-recordMills >= 1000 {
 					submitRecord(record.Record, record.Connection4)
 					lastProcessIdx = idx
@@ -50,12 +50,15 @@ func submitRecord(record protocol.Record, c *Connection4) {
 
 	needSubmit = c.MessageFilter.FilterByProtocol(c.Protocol)
 
-	duration := record.Response().TimestampNs() - record.Request().TimestampNs()
+	// Unidirectional protocols (RTCM, and RTCM/NMEA frames inside an NTRIP
+	// stream) produce records with no paired response. Treat their duration as
+	// zero and use the request as the effective response side for sizing.
+	duration := record.EffectiveResponse().TimestampNs() - record.Request().TimestampNs()
 	needSubmit = needSubmit && c.LatencyFilter.Filter(float64(duration)/1000000)
 
 	needSubmit = needSubmit &&
 		c.SizeFilter.FilterByReqSize(int64(record.Request().ByteSize())) &&
-		c.SizeFilter.FilterByRespSize(int64(record.Response().ByteSize()))
+		c.SizeFilter.FilterByRespSize(int64(record.EffectiveResponse().ByteSize()))
 
 	// Force-parse messages when export is configured, even if filters don't require it
 	forceParse := RecordExportFunc != nil

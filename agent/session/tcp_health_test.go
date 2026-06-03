@@ -823,3 +823,34 @@ func TestSessionIntegrationWithTCPAnalyzer(t *testing.T) {
 		t.Errorf("RTTSampleCount = %d, want 10", s.TCPAnalyzer.RTTSampleCount())
 	}
 }
+
+func TestRetransmissionsInWindow(t *testing.T) {
+	a := NewTCPHealthAnalyzer(DefaultTCPHealthConfig())
+	base := time.Date(2026, 6, 3, 14, 0, 0, 0, time.UTC)
+
+	// Three old retransmissions, then two recent ones near "close".
+	a.RecordRetransmission(base, 100, 1400)
+	a.RecordRetransmission(base.Add(1*time.Second), 200, 1400)
+	a.RecordRetransmission(base.Add(2*time.Second), 300, 1400)
+	a.RecordRetransmission(base.Add(58*time.Second), 400, 1400)
+	a.RecordRetransmission(base.Add(59*time.Second), 500, 1400)
+
+	closeTime := base.Add(60 * time.Second)
+
+	// Last 5s window: only the two near the end.
+	if got := a.RetransmissionsInWindow(closeTime, 5*time.Second); got != 2 {
+		t.Errorf("RetransmissionsInWindow(5s) = %d, want 2", got)
+	}
+	// Last 3s window includes 58s and 59s events (>= 57s).
+	if got := a.RetransmissionsInWindow(closeTime, 3*time.Second); got != 2 {
+		t.Errorf("RetransmissionsInWindow(3s) = %d, want 2", got)
+	}
+	// Window of 0 counts all up to closeTime.
+	if got := a.RetransmissionsInWindow(closeTime, 0); got != 5 {
+		t.Errorf("RetransmissionsInWindow(0) = %d, want 5 (all)", got)
+	}
+	// A very wide window also counts all.
+	if got := a.RetransmissionsInWindow(closeTime, time.Hour); got != 5 {
+		t.Errorf("RetransmissionsInWindow(1h) = %d, want 5", got)
+	}
+}

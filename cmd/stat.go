@@ -126,7 +126,7 @@ func init() {
 	statCmd.PersistentFlags().StringVarP(&groupBy, "group-by", "g", "default",
 		"Specify aggregation dimension: \n"+
 			"('conn', 'local-port', 'remote-port', 'remote-ip', 'protocol', 'http-path', 'none'\n"+
-			" 'rtcm-msg-type', 'rtcm-constellation', 'ntrip-mount', 'ntrip-session')\n"+
+			" 'rtcm-msg-type', 'rtcm-constellation', 'ntrip-mount', 'ntrip-session', 'ntrip-user')\n"+
 			"note: 'none' is aggregate all req-resp pair together")
 	// statCmd.PersistentFlags().StringVar(&subGroupBy, "sub-group-by", "default",
 	// 	"Specify sub aggregation dimension: like `group-by`, but before set this option you must specify `group-by`")
