@@ -5,6 +5,8 @@ import (
 
 	anc "kyanos/agent/analysis/common"
 	"kyanos/agent/protocol"
+	"kyanos/agent/protocol/ntrip"
+	"kyanos/agent/protocol/rtcm"
 	"kyanos/bpf"
 )
 
@@ -47,6 +49,42 @@ func init() {
 		}
 	}
 
+	// RTCM classifiers
+	classfierMap[anc.RTCMMessageType] = func(ar *anc.AnnotatedRecord) (anc.ClassId, error) {
+		// Try direct RTCM frame first
+		if frame, ok := ar.Record.Request().(*rtcm.RTCMFrame); ok {
+			return anc.ClassId(fmt.Sprintf("%d", frame.MessageType)), nil
+		}
+		// Try NTRIP-wrapped RTCM frame
+		if ntripFrame, ok := ar.Record.Request().(*ntrip.NTRIPRTCMFrame); ok {
+			return anc.ClassId(fmt.Sprintf("%d", ntripFrame.Inner.MessageType)), nil
+		}
+		return "_not_a_rtcm_frame_", nil
+	}
+	classfierMap[anc.RTCMConstellation] = func(ar *anc.AnnotatedRecord) (anc.ClassId, error) {
+		if frame, ok := ar.Record.Request().(*rtcm.RTCMFrame); ok {
+			return anc.ClassId(frame.Constellation.String()), nil
+		}
+		if ntripFrame, ok := ar.Record.Request().(*ntrip.NTRIPRTCMFrame); ok {
+			return anc.ClassId(ntripFrame.Inner.Constellation.String()), nil
+		}
+		return "_not_a_rtcm_frame_", nil
+	}
+
+	// NTRIP classifiers
+	classfierMap[anc.NTRIPMountPoint] = func(ar *anc.AnnotatedRecord) (anc.ClassId, error) {
+		if req, ok := ar.Record.Request().(*ntrip.NTRIPRequest); ok {
+			return anc.ClassId(req.MountPoint), nil
+		}
+		return "_not_a_ntrip_req_", nil
+	}
+	classfierMap[anc.NTRIPSessionType] = func(ar *anc.AnnotatedRecord) (anc.ClassId, error) {
+		if req, ok := ar.Record.Request().(*ntrip.NTRIPRequest); ok {
+			return anc.ClassId(req.SessionType.String()), nil
+		}
+		return "_not_a_ntrip_req_", nil
+	}
+
 	classfierMap[anc.ProtocolAdaptive] = func(ar *anc.AnnotatedRecord) (anc.ClassId, error) {
 		redisReq, ok := ar.Record.Request().(*protocol.RedisMessage)
 		if !ok {
@@ -84,6 +122,40 @@ func init() {
 		} else {
 			return redisReq.Command()
 		}
+	}
+
+	// RTCM human-readable classifiers
+	classIdHumanReadableMap[anc.RTCMMessageType] = func(ar *anc.AnnotatedRecord) string {
+		if frame, ok := ar.Record.Request().(*rtcm.RTCMFrame); ok {
+			return fmt.Sprintf("%d (%s)", frame.MessageType, rtcm.GetMessageName(frame.MessageType))
+		}
+		if ntripFrame, ok := ar.Record.Request().(*ntrip.NTRIPRTCMFrame); ok {
+			return fmt.Sprintf("%d (%s)", ntripFrame.Inner.MessageType, rtcm.GetMessageName(ntripFrame.Inner.MessageType))
+		}
+		return "_not_a_rtcm_frame_"
+	}
+	classIdHumanReadableMap[anc.RTCMConstellation] = func(ar *anc.AnnotatedRecord) string {
+		if frame, ok := ar.Record.Request().(*rtcm.RTCMFrame); ok {
+			return frame.Constellation.String()
+		}
+		if ntripFrame, ok := ar.Record.Request().(*ntrip.NTRIPRTCMFrame); ok {
+			return ntripFrame.Inner.Constellation.String()
+		}
+		return "_not_a_rtcm_frame_"
+	}
+
+	// NTRIP human-readable classifiers
+	classIdHumanReadableMap[anc.NTRIPMountPoint] = func(ar *anc.AnnotatedRecord) string {
+		if req, ok := ar.Record.Request().(*ntrip.NTRIPRequest); ok {
+			return req.MountPoint
+		}
+		return "_not_a_ntrip_req_"
+	}
+	classIdHumanReadableMap[anc.NTRIPSessionType] = func(ar *anc.AnnotatedRecord) string {
+		if req, ok := ar.Record.Request().(*ntrip.NTRIPRequest); ok {
+			return req.SessionType.String()
+		}
+		return "_not_a_ntrip_req_"
 	}
 
 	classIdHumanReadableMap[anc.Protocol] = func(ar *anc.AnnotatedRecord) string {

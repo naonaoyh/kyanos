@@ -51,6 +51,10 @@ type AgentOptions struct {
 	MaxAllowStuckTimeMills      int
 	StartGopsServer             bool
 
+	// RecordExportFunc is called for every parsed record before filtering.
+	// Used for RTCM data export: writes raw frames to .rtcm files.
+	RecordExportFunc func(record protocol.Record)
+
 	FilterComm              string
 	ProcessExecEventChannel chan *bpf.AgentProcessExecEvent
 	DockerEndpoint          string

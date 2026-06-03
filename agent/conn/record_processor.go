@@ -56,22 +56,27 @@ func submitRecord(record protocol.Record, c *Connection4) {
 	needSubmit = needSubmit &&
 		c.SizeFilter.FilterByReqSize(int64(record.Request().ByteSize())) &&
 		c.SizeFilter.FilterByRespSize(int64(record.Response().ByteSize()))
-	if parser := c.GetProtocolParser(c.Protocol); needSubmit && parser != nil {
+
+	// Force-parse messages when export is configured, even if filters don't require it
+	forceParse := RecordExportFunc != nil
+
+	if parser := c.GetProtocolParser(c.Protocol); (needSubmit || forceParse) && parser != nil {
 		var parsedRequest, parsedResponse protocol.ParsedMessage
-		if c.MessageFilter.FilterByRequest() {
+		if c.MessageFilter.FilterByRequest() || forceParse {
 			parsedRequest = record.Request()
 		}
-		if c.MessageFilter.FilterByResponse() {
+		if c.MessageFilter.FilterByResponse() || forceParse {
 			parsedResponse = record.Response()
 		}
-		if parsedRequest != nil || parsedResponse != nil {
-			needSubmit = c.MessageFilter.Filter(parsedRequest, parsedResponse)
-		} else {
-			needSubmit = true
+
+		// Call export hook before filtering (exports ALL parsed records)
+		if RecordExportFunc != nil {
+			RecordExportFunc(record)
 		}
 
-	} else {
-		needSubmit = false
+		if parsedRequest != nil || parsedResponse != nil {
+			needSubmit = needSubmit && c.MessageFilter.Filter(parsedRequest, parsedResponse)
+		}
 	}
 	if needSubmit {
 		RecordFunc(record, c)

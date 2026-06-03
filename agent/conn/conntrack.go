@@ -24,6 +24,11 @@ import (
 var RecordFunc func(protocol.Record, *Connection4) error
 var OnCloseRecordFunc func(*Connection4) error
 
+// RecordExportFunc is called for every parsed record BEFORE filtering.
+// It is used for RTCM data export: writing raw frames to .rtcm files.
+// When set, submitRecord will force-parse messages even if no filter criteria require it.
+var RecordExportFunc func(protocol.Record)
+
 var ConnectionMap *sync.Map = new(sync.Map)
 
 type Connection4 struct {

@@ -166,6 +166,53 @@ sudo ./kyanos watch
 ./kyanos watch http --path /abc
 ```
 
+### GNSS 协议支持（NTRIP / RTCM）
+
+Kyanos 还原生支持 GNSS 领域的专用协议，方便在 RTK（实时动态定位）场景中排查差分改正数据的传输问题。
+
+监听 RTCM 3.2 直连流量：
+
+```bash
+# 监听所有 RTCM 帧
+sudo ./kyanos watch rtcm
+
+# 按消息类型过滤（如只看 GPS MSM7）
+sudo ./kyanos watch rtcm --msg-type 1077
+
+# 按星座过滤
+sudo ./kyanos watch rtcm --constellation gps
+
+# 只看 CRC 校验失败的帧
+sudo ./kyanos watch rtcm --crc-errors
+
+# 导出所有 RTCM 帧到 .rtcm 文件（可用 RTKLIB 的 rtkrcv、convbin 回放分析）
+sudo ./kyanos watch rtcm --export output.rtcm
+```
+
+监听 NTRIP v1/v2 会话：
+
+```bash
+# 监听所有 NTRIP 会话
+sudo ./kyanos watch ntrip
+
+# 按挂载点过滤
+sudo ./kyanos watch ntrip --mount RTK_DATA
+
+# 按会话类型过滤（DataStream / SourcePush / Sourcetable）
+sudo ./kyanos watch ntrip --session data-stream
+
+# 统计分析：按消息类型聚合
+sudo ./kyanos stat rtcm --group-by rtcm-msg-type
+
+# 统计分析：按挂载点聚合
+sudo ./kyanos stat ntrip --group-by ntrip-mount
+
+# 从 NTRIP 流中导出 RTCM 数据
+sudo ./kyanos watch ntrip --export output.rtcm
+```
+
+详细的协议分析设计文档见 [docs/gnss-protocols.md](./docs/gnss-protocols.md)。
+
 了解更多，请参考文档：[Kyanos Docs](kyanos.io)
 
 ## 🏠 How to Build

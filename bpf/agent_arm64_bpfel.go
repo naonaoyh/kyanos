@@ -238,7 +238,9 @@ const (
 	AgentTrafficProtocolTKProtocolMux      AgentTrafficProtocolT = 12
 	AgentTrafficProtocolTKProtocolAMQP     AgentTrafficProtocolT = 13
 	AgentTrafficProtocolTKProtocolRocketMQ AgentTrafficProtocolT = 14
-	AgentTrafficProtocolTKNumProtocols     AgentTrafficProtocolT = 15
+	AgentTrafficProtocolTKProtocolNTRIP    AgentTrafficProtocolT = 15
+	AgentTrafficProtocolTKProtocolRTCM     AgentTrafficProtocolT = 16
+	AgentTrafficProtocolTKNumProtocols     AgentTrafficProtocolT = 17
 )
 
 // LoadAgent returns the embedded CollectionSpec for Agent.

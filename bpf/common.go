@@ -11,6 +11,8 @@ var ProtocolNamesMap = map[AgentTrafficProtocolT]string{
 	AgentTrafficProtocolTKProtocolMongo: "Mongo",
 	AgentTrafficProtocolTKProtocolRocketMQ: "RocketMQ",
 	AgentTrafficProtocolTKProtocolKafka:    "Kafka",
+	AgentTrafficProtocolTKProtocolNTRIP:    "NTRIP",
+	AgentTrafficProtocolTKProtocolRTCM:     "RTCM",
 }
 
 var StepCNNames [AgentStepTEnd + 1]string = [AgentStepTEnd + 1]string{"Start", "SSLWrite", "System Call(Out)", "TCP Layer(Out)", "IP Layer(Out)", "QDISC", "DEV Layer(Out)", "NIC(Out)", "NIC(In)", "DEV Layer(In)", "IP Layer(In)", "TCP Layer(In)", "User Data Copy", "System Call(In)", "SSLRead", "End"}

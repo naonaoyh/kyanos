@@ -326,6 +326,53 @@ static __always_inline enum message_type_t is_rocketmq_protocol(
 }
 
 
+// RTCM 3.x frame detection
+// Frame structure: Preamble(0xD3, 1B) + Reserved(6bits)+Length(10bits, 2B) + Payload + CRC-24Q(3B)
+// Minimum frame size: 6 bytes (preamble + header + CRC with 0 payload)
+static __always_inline enum message_type_t is_rtcm_protocol(const char *old_buf, size_t count) {
+  // Need at least 6 bytes: preamble(1) + header(2) + minimum payload check + CRC(3)
+  if (count < 6) {
+    return kUnknown;
+  }
+
+  char buf[3] = {};
+  bpf_probe_read_user(buf, 3, old_buf);
+
+  // Check preamble: must be 0xD3
+  if ((uint8_t)buf[0] != 0xD3) {
+    return kUnknown;
+  }
+
+  // Check reserved bits: high 6 bits of byte 1 must be 0
+  if ((buf[1] & 0xFC) != 0x00) {
+    return kUnknown;
+  }
+
+  // Extract payload length (10 bits): low 2 bits of byte1 + byte2
+  uint16_t length = ((uint16_t)(buf[1] & 0x03) << 8) | (uint8_t)buf[2];
+
+  // Payload length sanity check: must be within valid range
+  if (length > 1023) {
+    return kUnknown;
+  }
+
+  // If payload >= 2 bytes, check message type range (12 bits, 0-4095)
+  if (length >= 2 && count >= 5) {
+    char payload_buf[2] = {};
+    bpf_probe_read_user(payload_buf, 2, old_buf + 3);
+    uint16_t msg_type = ((uint16_t)(uint8_t)payload_buf[0] << 4) |
+                        ((uint8_t)payload_buf[1] >> 4);
+    // Message type 0 is reserved/invalid
+    if (msg_type == 0 || msg_type > 4095) {
+      return kUnknown;
+    }
+  }
+
+  // RTCM is a unidirectional push stream, treat all frames as "request"
+  return kRequest;
+}
+
+
 static __inline enum message_type_t is_dns_protocol(const char* buf, size_t count) {
   const int kDNSHeaderSize = 12;
 
@@ -384,6 +431,8 @@ static __always_inline struct protocol_message_t infer_protocol(const char *buf,
 
   if (TRACE_PROTOCOL(kProtocolHTTP) && (protocol_message.type = is_http_protocol(buf, count)) != kUnknown) {
     protocol_message.protocol = kProtocolHTTP;
+  } else if (TRACE_PROTOCOL(kProtocolRTCM) && (protocol_message.type = is_rtcm_protocol(buf, count)) != kUnknown) {
+    protocol_message.protocol = kProtocolRTCM;
   } else if (TRACE_PROTOCOL(kProtocolMongo) && (protocol_message.type = is_mongo_protocol(buf, count)) != kUnknown)  {
     protocol_message.protocol = kProtocolMongo;
   } else if (TRACE_PROTOCOL(kProtocolMySQL) && (protocol_message.type = is_mysql_protocol(buf, count, conn_info)) != kUnknown)  {

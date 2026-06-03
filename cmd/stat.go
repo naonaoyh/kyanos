@@ -105,6 +105,8 @@ func createAnalysisOptions() (anc.AnalysisOptions, error) {
 	options.ProtocolSpecificClassfiers[bpf.AgentTrafficProtocolTKProtocolHTTP] = anc.HttpPath
 	options.ProtocolSpecificClassfiers[bpf.AgentTrafficProtocolTKProtocolRedis] = anc.RedisCommand
 	options.ProtocolSpecificClassfiers[bpf.AgentTrafficProtocolTKProtocolMySQL] = anc.RemoteIp
+	options.ProtocolSpecificClassfiers[bpf.AgentTrafficProtocolTKProtocolRTCM] = anc.RTCMMessageType
+	options.ProtocolSpecificClassfiers[bpf.AgentTrafficProtocolTKProtocolNTRIP] = anc.NTRIPMountPoint
 	options.TimeLimit = timeLimit
 
 	options.Overview = overview
@@ -123,7 +125,8 @@ func init() {
 			"refer to the '--full-body' option.")
 	statCmd.PersistentFlags().StringVarP(&groupBy, "group-by", "g", "default",
 		"Specify aggregation dimension: \n"+
-			"('conn', 'local-port', 'remote-port', 'remote-ip', 'protocol', 'http-path', 'none')\n"+
+			"('conn', 'local-port', 'remote-port', 'remote-ip', 'protocol', 'http-path', 'none'\n"+
+			" 'rtcm-msg-type', 'rtcm-constellation', 'ntrip-mount', 'ntrip-session')\n"+
 			"note: 'none' is aggregate all req-resp pair together")
 	// statCmd.PersistentFlags().StringVar(&subGroupBy, "sub-group-by", "default",
 	// 	"Specify sub aggregation dimension: like `group-by`, but before set this option you must specify `group-by`")
