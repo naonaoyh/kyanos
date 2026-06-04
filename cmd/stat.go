@@ -31,7 +31,7 @@ sudo kyanos stat redis --bigresp
 	Run: func(cmd *cobra.Command, args []string) {
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
-		startAgent()
+		startAgent(cmd)
 	},
 }
 var enabledMetricsString string

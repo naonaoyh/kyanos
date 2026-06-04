@@ -13,7 +13,7 @@ var mysqlCmd *cobra.Command = &cobra.Command{
 		options.MessageFilter = mysql.MysqlFilter{}
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
-		startAgent()
+		startAgent(cmd)
 	},
 }
 

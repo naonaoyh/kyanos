@@ -32,7 +32,7 @@ sudo kyanos watch rocketmq --request-codes 10,11 --languages JAVA,Go
 				}
 				options.LatencyFilter = initLatencyFilter(cmd)
 				options.SizeFilter = initSizeFilter(cmd)
-				startAgent()
+				startAgent(cmd)
 			}
 		}
 	},

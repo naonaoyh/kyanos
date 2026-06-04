@@ -38,7 +38,7 @@ var rocketmqCmd *cobra.Command = &cobra.Command{
 
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
-		startAgent()
+		startAgent(cmd)
 	},
 }
 

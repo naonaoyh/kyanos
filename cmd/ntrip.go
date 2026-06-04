@@ -121,7 +121,7 @@ Examples:
 		initSessionDiagnosis(cmd)
 		applyLeapSeconds(cmd)
 
-		startAgent()
+		startAgent(cmd)
 	},
 }
 

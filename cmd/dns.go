@@ -18,7 +18,7 @@ var dnsCmd *cobra.Command = &cobra.Command{
 		options.MessageFilter = filter
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
-		startAgent()
+		startAgent(cmd)
 	},
 }
 

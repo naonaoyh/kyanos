@@ -13,7 +13,7 @@ var mongodbCmd *cobra.Command = &cobra.Command{
 		options.MessageFilter = mongodb.NewMongoDBFilter()
 		options.LatencyFilter = initLatencyFilter(cmd)
 		options.SizeFilter = initSizeFilter(cmd)
-		startAgent()
+		startAgent(cmd)
 	},
 }
 

@@ -45,7 +45,7 @@ func ParseSide(side string) (common.SideEnum, error) {
 
 var options ac.AgentOptions
 
-func startAgent() {
+func startAgent(cmd *cobra.Command) {
 	side, err := ParseSide(SidePar)
 	if err != nil {
 		return
@@ -75,7 +75,7 @@ func startAgent() {
 	options.PodName = PodName
 
 	// Populate GRPCOptions from persistent flags (no-op if --grpc-server is empty).
-	initGRPCOptions(rootCmd)
+	initGRPCOptions(cmd)
 
 	ac.Options = &options
 

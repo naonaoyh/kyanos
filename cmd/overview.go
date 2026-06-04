@@ -13,7 +13,7 @@ sudo kyanos overview
 	Run: func(cmd *cobra.Command, args []string) {
 		overview = true
 		groupBy = "remote-ip/protocol-adaptive"
-		startAgent()
+		startAgent(cmd)
 	},
 }
 

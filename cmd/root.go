@@ -32,7 +32,7 @@ sudo kyanos watch mysql --latency 100
 sudo kyanos stat http --metrics total-time
 sudo kyanos stat http --metrics total-time --group-by remote-ip`,
 	Run: func(cmd *cobra.Command, args []string) {
-		startAgent()
+		startAgent(cmd)
 	},
 }
 
