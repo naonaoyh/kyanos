@@ -233,8 +233,14 @@ func applyWebUIOptions(cmd *cobra.Command) {
 	if v, err := cmd.Flags().GetString("webui-addr"); err == nil && v != "" {
 		options.WebUIHTTPAddr = v
 	}
-	if v, err := cmd.Flags().GetBool("open-browser"); err == nil && v {
-		options.WebUIOpenBrowser = true
+	// --open-browser: respect explicit user setting; if not explicitly set,
+	// auto-enable in WSL (opens Windows host browser), auto-disable in containers.
+	if cmd.Flags().Changed("open-browser") {
+		if v, err := cmd.Flags().GetBool("open-browser"); err == nil {
+			options.WebUIOpenBrowser = v
+		}
+	} else if options.WebUIEnable {
+		options.WebUIOpenBrowser = common.IsWSL() && !common.IsContainer()
 	}
 }
 
@@ -343,7 +349,7 @@ func addSessionDiagnosisFlags(cmd *cobra.Command) {
 	cmd.Flags().String("webui-addr", ":8080",
 		"HTTP address for embedded Web Console (default :8080)")
 	cmd.Flags().Bool("open-browser", false,
-		"Auto-open browser when --webui is enabled")
+		"Auto-open browser when --webui is enabled (auto-enabled in WSL, disabled in containers)")
 }
 
 func InitLog() {
