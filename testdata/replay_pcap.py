@@ -9,9 +9,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description="NTRIP PCAP Replay Tool")
     parser.add_argument("--pcap", type=str, default="testdata/testdata-small.pcap", help="Path to the PCAP file")
     parser.add_argument("--port", type=int, default=25322, help="Local TCP port to replay on")
-    parser.add_argument("--inject-handshake", type=str, choices=["GET", "SOURCE", "NONE"], default="GET", 
+    parser.add_argument("--inject-handshake", type=str, choices=["GET", "SOURCE", "NONE"], default="GET",
                         help="Inject standard NTRIP handshake before replaying payload")
     parser.add_argument("--speed", type=float, default=1.0, help="Replay speed multiplier (e.g. 1.0 = normal, 20.0 = fast)")
+    parser.add_argument("--repeat", action="store_true", help="Loop replay indefinitely (for manual TUI/WebUI testing)")
+    parser.add_argument("--duration", type=float, default=0, help="Total replay duration in seconds (0 = play once, ignored if --repeat)")
     return parser.parse_args()
 
 def read_pcap(filepath):
@@ -256,95 +258,126 @@ def main():
         time.sleep(0.5)
         
     # 6. Replay Packets
-    print(f"[replay] Playback starting now at {args.speed}x speed...")
+    print(f"[replay] Playback starting now at {args.speed}x speed (repeat={args.repeat}, duration={args.duration}s)...")
     first_ts = packets[0]['ts']
-    start_time = time.time()
-    
-    gga_count = 0
-    rtcm_count = 0
-    other_count = 0
-    total_bytes = 0
-    
-    last_report_time = start_time
-    report_interval = 1.0  # print progress every second for continuous check
-    
-    for i, pkt in enumerate(packets):
-        # Calculate absolute time target to emit
-        elapsed_pcap = (pkt['ts'] - first_ts) / args.speed
-        elapsed_real = time.time() - start_time
-        
-        sleep_time = elapsed_pcap - elapsed_real
-        if sleep_time > 0:
-            time.sleep(sleep_time)
-            
-        payload = pkt['payload']
-        src_port = pkt['src_port']
-        dst_port = pkt['dst_port']
-        
-        # Analyze packet type
-        if payload.startswith(b'$'):
-            gga_count += 1
-        elif len(payload) >= 3 and payload[0] == 0xD3 and (payload[1] & 0xFC) == 0:
-            rtcm_count += 1
-        else:
-            other_count += 1
-            
-        total_bytes += len(payload)
-        
-        # Periodically report emission for continuous output check
-        now = time.time()
-        if now - last_report_time >= report_interval:
-            print(f"[replay-progress] Running for {now - start_time:.1f}s, sent: {i+1}/{len(packets)} packets (GGA={gga_count}, RTCM={rtcm_count}, Bytes={total_bytes})", flush=True)
-            last_report_time = now
-            
-            
-        # Identify the client key
-        if src_port != 8003:
-            client_key = (pkt['src_ip'], pkt['src_port'])
-            is_client_sending = True
-        else:
-            client_key = (pkt['dst_ip'], pkt['dst_port'])
-            is_client_sending = False
-            
-        if client_key not in client_mapping:
-            # Safe boundary checks
-            continue
-            
-        c_sock = client_mapping[client_key]
-        s_sock = server_client_mapping[client_key]
-        
-        # --- Crucial Direction Swap to Simulate Normal NTRIP Roles ---
-        # User Rule: RTCM is downlinked by Caster (Server), GGA is uplinked by Rover (Client).
-        # In the original PCAP:
-        #   - Client sent RTCM (is_client_sending = True)
-        #   - Server sent GGA (is_client_sending = False)
-        # To align with roles:
-        #   - We let Local Client Rover send GGA (meaning when original is_client_sending = False, local Client sends)
-        #   - We let Local Server Caster send RTCM (meaning when original is_client_sending = True, local Server sends)
-        try:
-            t0_send = time.time()
-            if is_client_sending:
-                # Original: Client (Rover) -> Server (Caster) sending RTCM
-                # Local Replay: Local Server (Caster) -> Local Client (Rover) sending RTCM
-                s_sock.sendall(payload)
+    pcap_span = (packets[-1]['ts'] - packets[0]['ts']) / args.speed
+    global_start = time.time()
+    loop_count = 0
+
+    while True:
+        loop_count += 1
+        loop_start = time.time()
+        gga_count = 0
+        rtcm_count = 0
+        other_count = 0
+        total_bytes = 0
+
+        if loop_count > 1:
+            print(f"[replay] Starting loop #{loop_count}...", flush=True)
+            # Re-inject handshake on each loop to simulate reconnection
+            if args.inject_handshake != "NONE":
+                for client_key, c_sock in client_mapping.items():
+                    s_sock = server_client_mapping[client_key]
+                    if args.inject_handshake == "GET":
+                        req = (
+                            "GET /RTCM3_TEST HTTP/1.1\r\n"
+                            "User-Agent: NTRIP KyanosPCAPReplay/1.0\r\n"
+                            "Authorization: Basic dGVzdHVzZXI6dGVzdHBhc3M=\r\n"
+                            "Ntrip-Version: Ntrip/2.0\r\n"
+                            "\r\n"
+                        )
+                        resp = "ICY 200 OK\r\n\r\n"
+                        try:
+                            c_sock.sendall(req.encode())
+                            time.sleep(0.05)
+                            s_sock.recv(1024)
+                            s_sock.sendall(resp.encode())
+                            time.sleep(0.05)
+                            c_sock.recv(1024)
+                        except:
+                            pass
+
+        last_report_time = loop_start
+        report_interval = 1.0
+
+        for i, pkt in enumerate(packets):
+            # Check duration limit
+            if args.duration > 0 and (time.time() - global_start) >= args.duration:
+                print(f"[replay] Duration limit ({args.duration}s) reached. Stopping.", flush=True)
+                break
+
+            # Calculate absolute time target to emit
+            elapsed_pcap = (pkt['ts'] - first_ts) / args.speed
+            elapsed_real = time.time() - loop_start
+
+            sleep_time = elapsed_pcap - elapsed_real
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+            payload = pkt['payload']
+            src_port = pkt['src_port']
+            dst_port = pkt['dst_port']
+
+            # Analyze packet type
+            if payload.startswith(b'$'):
+                gga_count += 1
+            elif len(payload) >= 3 and payload[0] == 0xD3 and (payload[1] & 0xFC) == 0:
+                rtcm_count += 1
             else:
-                # Original: Server (Caster) -> Client (Rover) sending GGA
-                # Local Replay: Local Client (Rover) -> Local Server (Caster) sending GGA
-                c_sock.sendall(payload)
-            send_duration_ms = (time.time() - t0_send) * 1000.0
-            if send_duration_ms > 50.0:
-                print(f"[WARN] Socket send blocked for {send_duration_ms:.1f} ms on packet {i}!", flush=True)
-        except Exception as e:
-            print(f"[replay] Socket send error on packet {i}: {e}", flush=True)
-            break
-            
-    duration = time.time() - start_time
-    expected_duration = (packets[-1]['ts'] - packets[0]['ts']) / args.speed if len(packets) > 1 else 0
-    print(f"[replay] Finished replaying all packets.", flush=True)
-    print(f"[replay-summary] Stats: Total Packets = {len(packets)}, GGA = {gga_count}, RTCM = {rtcm_count}, Other = {other_count}, Total Bytes = {total_bytes}, Duration = {duration:.2f}s, Expected = {expected_duration:.2f}s, Rate = {len(packets)/duration:.2f} pkts/s", flush=True)
-    
-    if abs(duration - expected_duration) > max(1.0, expected_duration * 0.2):
-        print(f"[WARN] Playback duration jitter exceeded 20%! Expected: {expected_duration:.2f}s, Actual: {duration:.2f}s", flush=True)
+                other_count += 1
+
+            total_bytes += len(payload)
+
+            # Periodically report emission for continuous output check
+            now = time.time()
+            if now - last_report_time >= report_interval:
+                print(f"[replay-progress] Loop #{loop_count} {now - global_start:.1f}s, sent: {i+1}/{len(packets)} packets (GGA={gga_count}, RTCM={rtcm_count}, Bytes={total_bytes})", flush=True)
+                last_report_time = now
+
+            # Identify the client key
+            if src_port != 8003:
+                client_key = (pkt['src_ip'], pkt['src_port'])
+                is_client_sending = True
+            else:
+                client_key = (pkt['dst_ip'], pkt['dst_port'])
+                is_client_sending = False
+
+            if client_key not in client_mapping:
+                continue
+
+            c_sock = client_mapping[client_key]
+            s_sock = server_client_mapping[client_key]
+
+            # Direction swap: RTCM downlinked by Server, GGA uplinked by Client
+            try:
+                t0_send = time.time()
+                if is_client_sending:
+                    s_sock.sendall(payload)
+                else:
+                    c_sock.sendall(payload)
+                send_duration_ms = (time.time() - t0_send) * 1000.0
+                if send_duration_ms > 50.0:
+                    print(f"[WARN] Socket send blocked for {send_duration_ms:.1f} ms on packet {i}!", flush=True)
+            except Exception as e:
+                print(f"[replay] Socket send error on packet {i}: {e}", flush=True)
+                break
+        else:
+            # Loop completed normally (no break)
+            duration = time.time() - loop_start
+            print(f"[replay] Loop #{loop_count} completed: GGA={gga_count}, RTCM={rtcm_count}, Duration={duration:.2f}s", flush=True)
+
+            if not args.repeat:
+                # Single play mode — done
+                break
+            # Repeat mode — brief pause then loop again
+            time.sleep(0.5)
+            continue
+
+        # Break from inner loop (duration limit or error)
+        break
+
+    total_duration = time.time() - global_start
+    print(f"[replay-summary] Total loops={loop_count}, Total Duration={total_duration:.2f}s", flush=True)
     
     # 7. Cleanup Sockets
     time.sleep(1.0)
