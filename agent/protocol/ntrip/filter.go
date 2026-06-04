@@ -142,9 +142,9 @@ func (f NTRIPFilter) filterResponse(resp *NTRIPResponse) bool {
 		return false
 	}
 
-	// ErrorsOnly: show only error responses
+	// ErrorsOnly: show only error responses (status >= 400 or ERROR prefix)
 	if f.ErrorsOnly {
-		isError := resp.StatusCode >= 400 || resp.StatusLine == "" ||
+		isError := resp.StatusCode >= 400 || resp.StatusCode == 0 ||
 			(len(resp.StatusLine) >= 5 && resp.StatusLine[:5] == "ERROR")
 		if !isError {
 			return false

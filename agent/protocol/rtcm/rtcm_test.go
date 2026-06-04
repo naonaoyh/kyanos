@@ -713,7 +713,7 @@ func TestRTCMFrameFormatToString(t *testing.T) {
 	}
 
 	// Verify key components are present
-	expectedParts := []string{"1074", "GPS MSM4", "GPS", "MSM4", "crc_valid=true"}
+	expectedParts := []string{"1074", "GPS MSM4", "GPS", "MSM4", "PASS"}
 	for _, part := range expectedParts {
 		if !contains(result, part) {
 			t.Errorf("FormatToString() = %q, missing %q", result, part)

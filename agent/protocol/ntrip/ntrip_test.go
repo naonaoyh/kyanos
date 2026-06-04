@@ -1192,8 +1192,8 @@ func TestParseStreamSOURCERequestPasswordOnly(t *testing.T) {
 }
 
 func TestParseStreamGETRequestWithBasicAuthChinese(t *testing.T) {
-	// base64("用户:密码") = "55So5oi3OuWtpuS5oA=="
-	data := "GET /RTK HTTP/1.1\r\nHost: caster.example.com\r\nAuthorization: Basic 55So5oi3OuWtpuS5oA==\r\n\r\n"
+	// base64("用户:密码") = "55So5oi3OuWvhueggQ=="
+	data := "GET /RTK HTTP/1.1\r\nHost: caster.example.com\r\nAuthorization: Basic 55So5oi3OuWvhueggQ==\r\n\r\n"
 	sb := makeStreamBuffer([]byte(data))
 	p := &NTRIPStreamParser{}
 

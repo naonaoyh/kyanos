@@ -472,8 +472,12 @@ func (p *NTRIPStreamParser) parseRequest(
 	tpReader := textproto.NewReader(bufio.NewReader(strings.NewReader(headerBlock)))
 	mimeHeader, err := tpReader.ReadMIMEHeader()
 	if err != nil {
-		// Non-fatal: parse what we can
-		mimeHeader = make(textproto.MIMEHeader)
+		// ReadMIMEHeader returns io.EOF when the input doesn't end with
+		// \r\n\r\n, but it still returns the headers parsed so far.
+		// Only create an empty header if nil was returned.
+		if mimeHeader == nil {
+			mimeHeader = make(textproto.MIMEHeader)
+		}
 	}
 
 	// Detect NTRIP version
@@ -713,7 +717,9 @@ func (p *NTRIPStreamParser) parseHTTPResponse(
 	tpReader := textproto.NewReader(bufio.NewReader(strings.NewReader(headerBlock)))
 	mimeHeader, err := tpReader.ReadMIMEHeader()
 	if err != nil {
-		mimeHeader = make(textproto.MIMEHeader)
+		if mimeHeader == nil {
+			mimeHeader = make(textproto.MIMEHeader)
+		}
 	}
 
 	bodyStart := headerEnd + 4
@@ -884,7 +890,7 @@ func (p *NTRIPStreamParser) parseNMEA(
 
 	// Extract sentence type (e.g., "GPGGA" → "GGA", "GNGGA" → "GGA")
 	rawType := ""
-	if commaIdx := strings.Index(sentence, ","); commaIdx > 0 && commaIdx > starIdx-5 {
+	if commaIdx := strings.Index(sentence, ","); commaIdx > 0 && commaIdx < starIdx-2 {
 		rawType = sentence[1:commaIdx]
 	}
 	sentenceType := rawType
@@ -975,7 +981,7 @@ func (p *NTRIPStreamParser) Match(
 
 	// Remaining responses (RTCM frames or unmatched responses)
 	for i := respIdx; i < len(respMsgs); i++ {
-		records = append(records, protocol.Record{Req: respMsgs[i]})
+		records = append(records, protocol.Record{Resp: respMsgs[i]})
 	}
 
 	return records
@@ -1124,8 +1130,8 @@ func parseGGASentence(sentence string, nmea *NTRIPNMEASentence) {
 	}
 
 	// Differential reference station ID (field 13, optional)
-	if len(fields) > 13 && fields[13] != "" {
-		nmea.DiffStationID = fields[13]
+	if len(fields) > 13 && strings.TrimSpace(fields[13]) != "" {
+		nmea.DiffStationID = strings.TrimSpace(fields[13])
 	}
 }
 
