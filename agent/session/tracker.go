@@ -385,6 +385,13 @@ func (t *SessionTracker) handleNTRIPRequest(req *ntrip.NTRIPRequest, resp protoc
 	// Auth info
 	if req.HasAuth || req.Method == ntrip.MethodSource {
 		s.AuthMethod = authMethodString(req)
+		// Mark that we've observed an auth attempt, even if response hasn't
+		// arrived yet (e.g. request and response captured on different
+		// Connection4 sides of a loopback flow).
+		if !s.AuthChecked {
+			s.AuthChecked = true
+			s.AuthSuccess = false // unknown until we see the response
+		}
 	}
 
 	// If we have a response, check auth success/failure

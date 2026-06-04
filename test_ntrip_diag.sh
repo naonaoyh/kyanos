@@ -13,7 +13,9 @@
 #   5. Connection closes (server-initiated)
 # =============================================================================
 
-set -e
+# set -e intentionally omitted: kill/wait on background processes returns
+# non-zero codes (130/137) that would prematurely exit the script.
+# Verification is done explicitly at the end via exit $STATUS.
 export PATH=/usr/local/go/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH
 PROJDIR=/mnt/e/Work/kyanos
 cd $PROJDIR
@@ -260,23 +262,77 @@ echo ""
 echo "--- JSONL session export ---"
 if [ -f "$JSONL_LOG" ]; then
     echo "Sessions exported: $(wc -l < $JSONL_LOG)"
-    cat $JSONL_LOG | python3 -m json.tool 2>/dev/null | head -50 || cat $JSONL_LOG
+    python3 -m json.tool "$JSONL_LOG" 2>/dev/null | head -50 || cat "$JSONL_LOG"
 else
     echo "No JSONL output (file not created)"
 fi
 
 echo ""
 echo "--- Diagnostic report output ---"
-grep -i "diag\|score\|session\|issue\|disconnect\|GGA\|RTCM\|auth\|report" $DIAG_LOG | grep -v "fexit\|fentry\|256 color\|openssl\|btf" | head -30
+grep -i "diag\|score\|session\|issue\|disconnect\|GGA\|RTCM\|auth\|report" "$DIAG_LOG" \
+    | grep -v "fexit\|fentry\|256 color\|openssl\|btf" \
+    | head -30 || true
 
 echo ""
 echo "--- Protocol detection ---"
-grep "protocol updated\|protocol=15\|NTRIP" $DIAG_LOG | head -5
+grep "protocol updated\|protocol=15\|NTRIP" "$DIAG_LOG" | head -5 || true
 
 echo ""
 echo "--- Session data captured ---"
-grep "syscall.*protocol=15" $DIAG_LOG | wc -l
-echo "syscall events with NTRIP protocol"
+NTRIP_EVENTS=$(grep -c "syscall.*protocol=15" "$DIAG_LOG" || true)
+echo "$NTRIP_EVENTS syscall events with NTRIP protocol"
 
 echo ""
-echo "=== TEST COMPLETE ==="
+echo "=============================================="
+echo "  VERIFICATION"
+echo "=============================================="
+STATUS=0
+
+# Check 1: JSONL was created with at least 1 session
+if [ -f "$JSONL_LOG" ] && [ "$(wc -l < $JSONL_LOG)" -ge 1 ]; then
+    echo "JSONL export: PASS ($(wc -l < $JSONL_LOG) sessions)"
+else
+    echo "JSONL export: FAIL (file missing or empty)"
+    STATUS=1
+fi
+
+# Check 2: Diagnostic report was generated
+if grep -q "NTRIP Session Diagnostic Report" "$DIAG_LOG" 2>/dev/null; then
+    echo "Diagnostic report: PASS"
+else
+    echo "Diagnostic report: FAIL (not found in log)"
+    STATUS=1
+fi
+
+# Check 3: RTCM frames were captured
+RTCM_COUNT=$(grep -c "RTCM3 Frame" "$DIAG_LOG" || true)
+if [ "$RTCM_COUNT" -gt 0 ]; then
+    echo "RTCM capture: PASS ($RTCM_COUNT frames)"
+else
+    echo "RTCM capture: FAIL (0 frames)"
+    STATUS=1
+fi
+
+# Check 4: GGA was captured
+if grep -q "NTRIP NMEA" "$DIAG_LOG" 2>/dev/null; then
+    echo "GGA capture: PASS"
+else
+    echo "GGA capture: FAIL (no NMEA found)"
+    STATUS=1
+fi
+
+# Check 5: Score was generated
+if grep -q "Total:.*100" "$DIAG_LOG" 2>/dev/null; then
+    echo "Diagnostic score: PASS"
+else
+    echo "Diagnostic score: FAIL"
+    STATUS=1
+fi
+
+echo ""
+if [ $STATUS -eq 0 ]; then
+    echo "=== TEST COMPLETE: ALL PASS ==="
+else
+    echo "=== TEST COMPLETE: SOME CHECKS FAILED ==="
+fi
+exit $STATUS

@@ -109,12 +109,14 @@ func FormatSessionReport(s *NTRIPSession, cfg ReportConfig) string {
 
 	// --- Login ---
 	writeLine("--- Login (S1) ---")
-	if authChecked {
+	if authChecked && httpStatus > 0 {
 		status := "success"
 		if !authSuccess {
 			status = "FAILED"
 		}
 		writeLine("  Auth:    %s (%s), HTTP %d", status, authMethod, httpStatus)
+	} else if authChecked {
+		writeLine("  Auth:    observed (%s), response not captured", authMethod)
 	} else {
 		writeLine("  Auth:    not observed")
 	}

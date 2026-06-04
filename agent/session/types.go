@@ -656,8 +656,8 @@ func (s *NTRIPSession) AnalyzeDisconnect(ggaTimeout time.Duration, retransThresh
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Rule 5: Auth failure (strongest signal)
-	if s.AuthChecked && !s.AuthSuccess {
+	// Rule 5: Auth failure (strongest signal — only when response was captured)
+	if s.AuthChecked && !s.AuthSuccess && s.HTTPStatusCode > 0 {
 		s.DisconnectReason = DisconnectAuthFailed
 		s.DisconnectDetail = fmt.Sprintf("Auth failed: HTTP %d", s.HTTPStatusCode)
 		return

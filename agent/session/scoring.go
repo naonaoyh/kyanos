@@ -54,8 +54,10 @@ func (s *NTRIPSession) Score(ggaWarnInterval, rtcmWarnInterval time.Duration) Di
 		StabilityScore: 100,
 	}
 
-	// Login scoring
-	if s.AuthChecked && !s.AuthSuccess {
+	// Login scoring — only penalize when we have a concrete failure
+	// (response seen with non-2xx status), not when auth was merely
+	// observed without a response (e.g. loopback split-capture).
+	if s.AuthChecked && !s.AuthSuccess && s.HTTPStatusCode > 0 {
 		score.LoginScore -= 100
 		score.Issues = append(score.Issues, DiagnosticIssue{
 			Category:    "login",

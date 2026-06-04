@@ -85,12 +85,14 @@ func startPID(pid int, netns int64) {
 func stopPID(pid int) {
 	cacheLock.Lock()
 	defer cacheLock.Unlock()
-	common.AgentLog.Debugf("Stop tracking PID %d, netns: %d", pid)
 	if info, exists := pidCache.Load(pid); exists {
-		pidCache.Delete(pid)
 		pidInfo := info.(PIDInfo)
+		common.AgentLog.Debugf("Stop tracking PID %d, netns: %d", pid, pidInfo.NetNS)
+		pidCache.Delete(pid)
 		pidInfo.Timestamp = time.Now()
 		deadPids.Store(pid, pidInfo)
+	} else {
+		common.AgentLog.Debugf("Stop tracking PID %d (not in cache)", pid)
 	}
 }
 
