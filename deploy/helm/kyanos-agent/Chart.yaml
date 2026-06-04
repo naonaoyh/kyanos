@@ -1,0 +1,21 @@
+apiVersion: v2
+name: kyanos-agent
+description: Kyanos GNSS diagnostic agent — eBPF-based NTRIP/RTCM network monitor deployed as a DaemonSet
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ebpf
+  - network
+  - ntrip
+  - rtcm
+  - gnss
+  - diagnostics
+  - kubernetes
+  - tke
+home: https://kyanos.io/
+sources:
+  - https://github.com/hengyoush/kyanos
+maintainers:
+  - name: kyanos-team
+    url: https://github.com/hengyoush/kyanos

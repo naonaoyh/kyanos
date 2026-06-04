@@ -1,0 +1,20 @@
+apiVersion: v2
+name: kyanos-console
+description: Kyanos Web Console — gRPC control-plane server and web dashboard for managing Kyanos agents
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - ebpf
+  - network
+  - ntrip
+  - gnss
+  - console
+  - dashboard
+  - grpc
+home: https://kyanos.io/
+sources:
+  - https://github.com/hengyoush/kyanos
+maintainers:
+  - name: kyanos-team
+    url: https://github.com/hengyoush/kyanos

@@ -1,0 +1,71 @@
+# Default values for kyanos-console
+
+image:
+  registry: ccr.ccs.tencentyun.com
+  repository: kyanos/kyanos-console
+  tag: ""  # Defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+replicaCount: 2
+
+# gRPC server configuration (agents connect here)
+grpc:
+  port: 9090
+  tls:
+    enabled: false
+    # Secret containing tls.crt and tls.key
+    secretName: ""
+
+# HTTP server configuration (web dashboard)
+http:
+  port: 8080
+
+# Service configuration
+service:
+  type: ClusterIP
+  grpcPort: 9090
+  httpPort: 8080
+  annotations: {}
+
+# Ingress for web dashboard
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: console.kyanos.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Resource requests and limits
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# Storage for session data / diagnostics history
+persistence:
+  enabled: false
+  storageClass: ""
+  size: 10Gi
+  accessModes:
+    - ReadWriteOnce
+
+# Pod configuration
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+
+# Service account
+serviceAccount:
+  create: true
+  name: "kyanos-console"
+  annotations: {}

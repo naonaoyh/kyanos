@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kyanos-console.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kyanos-console.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kyanos-console.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kyanos-console.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kyanos-console.serviceAccountName" . }}
+      containers:
+        - name: console
+          image: {{ include "kyanos-console.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.grpc.port }}
+              protocol: TCP
+            - name: http
+              containerPort: {{ .Values.http.port }}
+              protocol: TCP
+          env:
+            - name: GRPC_PORT
+              value: {{ .Values.grpc.port | quote }}
+            - name: HTTP_PORT
+              value: {{ .Values.http.port | quote }}
+            {{- if .Values.grpc.tls.enabled }}
+            - name: GRPC_TLS_ENABLED
+              value: "true"
+            - name: GRPC_TLS_CERT
+              value: "/etc/kyanos-console/tls/tls.crt"
+            - name: GRPC_TLS_KEY
+              value: "/etc/kyanos-console/tls/tls.key"
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.grpc.tls.enabled }}
+            - name: tls-certs
+              mountPath: /etc/kyanos-console/tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /var/lib/kyanos-console
+            {{- end }}
+      volumes:
+        {{- if .Values.grpc.tls.enabled }}
+        - name: tls-certs
+          secret:
+            secretName: {{ .Values.grpc.tls.secretName | default (printf "%s-tls" (include "kyanos-console.fullname" .)) }}
+        {{- end }}
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "kyanos-console.fullname" . }}-data
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

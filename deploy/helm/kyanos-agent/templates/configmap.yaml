@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kyanos-agent.fullname" . }}-config
+  namespace: {{ include "kyanos-agent.namespace" . }}
+  labels:
+    {{- include "kyanos-agent.labels" . | nindent 4 }}
+data:
+  # Kyanos agent configuration overrides
+  # These values are mounted at /etc/kyanos/ and can be referenced by the agent.
+  kyanos.yaml: |
+    # Console gRPC server address
+    grpc-server: {{ .Values.grpc.server | quote }}
+
+    # Diagnostics mode
+    diag: {{ .Values.diagnostics.enabled }}
+    tcp-health: {{ .Values.diagnostics.tcpHealth }}
+
+    # Protocol to watch
+    protocol: {{ .Values.diagnostics.protocol | quote }}
+
+    # TLS configuration
+    {{- if .Values.grpc.tls.enabled }}
+    grpc-tls: true
+    {{- if .Values.grpc.tls.caCert }}
+    grpc-ca-cert: {{ .Values.grpc.tls.caCert | quote }}
+    {{- end }}
+    {{- if .Values.grpc.tls.insecureSkipVerify }}
+    grpc-tls-skip-verify: true
+    {{- end }}
+    {{- end }}

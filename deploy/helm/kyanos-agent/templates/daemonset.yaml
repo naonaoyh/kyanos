@@ -1,0 +1,166 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "kyanos-agent.fullname" . }}
+  namespace: {{ include "kyanos-agent.namespace" . }}
+  labels:
+    {{- include "kyanos-agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "kyanos-agent.selectorLabels" . | nindent 6 }}
+  updateStrategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kyanos-agent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kyanos-agent.serviceAccountName" . }}
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      containers:
+        - name: kyanos-agent
+          image: {{ include "kyanos-agent.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - "./kyanos"
+          args:
+            - "watch"
+            - {{ .Values.diagnostics.protocol | quote }}
+            {{- if .Values.diagnostics.enabled }}
+            - "--diag"
+            {{- end }}
+            {{- if .Values.diagnostics.tcpHealth }}
+            - "--tcp-health"
+            {{- end }}
+            - "--grpc-server"
+            - "$(CONSOLE_ADDR)"
+            {{- if .Values.grpc.tls.enabled }}
+            - "--grpc-tls"
+            {{- if .Values.grpc.tls.caCert }}
+            - "--grpc-ca-cert"
+            - {{ .Values.grpc.tls.caCert | quote }}
+            {{- end }}
+            {{- end }}
+            {{- range .Values.diagnostics.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CONSOLE_ADDR
+              value: {{ .Values.grpc.server | quote }}
+            {{- if .Values.agentVersion }}
+            - name: KYANOS_VERSION
+              value: {{ .Values.agentVersion | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - BPF
+                - NET_ADMIN
+                - SYS_PTRACE
+                - NET_RAW
+                - PERFMON
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # Required for eBPF: BTF type information
+            - name: btf
+              mountPath: /sys/kernel/btf
+              readOnly: true
+            # Required for eBPF: bpf filesystem
+            - name: bpf-fs
+              mountPath: /sys/fs/bpf
+            # Required for process introspection
+            - name: proc
+              mountPath: /proc
+              readOnly: true
+            # Required for kernel debug info
+            - name: debugfs
+              mountPath: /sys/kernel/debug
+              readOnly: true
+            # Optional: config overrides
+            - name: config
+              mountPath: /etc/kyanos
+              readOnly: true
+            {{- if .Values.grpc.tls.enabled }}
+            - name: tls-certs
+              mountPath: /etc/kyanos/tls
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: btf
+          hostPath:
+            path: /sys/kernel/btf
+            type: Directory
+        - name: bpf-fs
+          hostPath:
+            path: /sys/fs/bpf
+            type: DirectoryOrCreate
+        - name: proc
+          hostPath:
+            path: /proc
+            type: Directory
+        - name: debugfs
+          hostPath:
+            path: /sys/kernel/debug
+            type: Directory
+        - name: config
+          configMap:
+            name: {{ include "kyanos-agent.fullname" . }}-config
+            optional: true
+        {{- if .Values.grpc.tls.enabled }}
+        - name: tls-certs
+          secret:
+            secretName: {{ include "kyanos-agent.fullname" . }}-tls
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

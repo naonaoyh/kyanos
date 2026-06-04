@@ -1,0 +1,103 @@
+# Default values for kyanos-agent Helm chart (TKE deployment)
+
+image:
+  # TKE Container Registry (Tencent Cloud)
+  registry: ccr.ccs.tencentyun.com
+  repository: kyanos/kyanos-agent
+  tag: ""  # Defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# gRPC control-plane connection to Console server (Phase 7/8)
+grpc:
+  # Address of the Console server (host:port)
+  server: "kyanos-console.kyanos-system.svc.cluster.local:9090"
+  tls:
+    enabled: false
+    # Path to CA cert for verifying Console server
+    caCert: ""
+    # Path to client cert (mTLS)
+    clientCert: ""
+    # Path to client key (mTLS)
+    clientKey: ""
+    # Skip server certificate verification (development only)
+    insecureSkipVerify: false
+
+# Diagnostics configuration
+diagnostics:
+  # Enable NTRIP diagnostic mode
+  enabled: true
+  # Protocol to watch
+  protocol: "ntrip"
+  # Enable TCP health checking
+  tcpHealth: true
+  # Additional kyanos CLI flags
+  extraArgs: []
+  # Example:
+  #   - "--remote-port=2101"
+  #   - "--latency-filter=100"
+
+# Agent version reported to Console
+agentVersion: ""
+
+# Resource requests and limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Node selector for scheduling (TKE node labels)
+nodeSelector: {}
+  # Example: restrict to GNSS processing nodes
+  # node-role.kubernetes.io/gnss: ""
+
+# Tolerations for TKE nodes
+tolerations:
+  # Tolerate all taints to ensure deployment on every node
+  - operator: Exists
+
+# Pod affinity/anti-affinity rules
+affinity: {}
+
+# Priority class for the DaemonSet pods
+priorityClassName: ""
+
+# Service account configuration
+serviceAccount:
+  create: true
+  name: "kyanos-agent"
+  annotations: {}
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Additional environment variables
+extraEnv: []
+  # - name: KYANOS_LOG_LEVEL
+  #   value: "debug"
+
+# Additional volume mounts
+extraVolumeMounts: []
+
+# Additional volumes
+extraVolumes: []
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod labels
+podLabels: {}
+
+# Update strategy for DaemonSet
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+# Namespace override
+namespaceOverride: ""
