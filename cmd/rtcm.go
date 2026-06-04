@@ -75,6 +75,7 @@ Examples:
 		initSessionDiagnosis(cmd)
 		applyLeapSeconds(cmd)
 		applyPcapOptions(cmd)
+		applyWebUIOptions(cmd)
 
 		startAgent(cmd)
 	},

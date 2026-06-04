@@ -112,6 +112,10 @@ func (c *Console) Hub() *WSHub { return c.hub }
 // GRPCHandler returns the AgentService handler.
 func (c *Console) GRPCHandler() *AgentServiceHandler { return c.handler }
 
+// API returns the REST API handler for external configuration (e.g., static
+// file serving, TUI mode callback).
+func (c *Console) API() *APIHandler { return c.api }
+
 // Start launches the gRPC and HTTP servers concurrently. It blocks until
 // the context is cancelled, then performs a graceful shutdown.
 func (c *Console) Start(ctx context.Context) error {

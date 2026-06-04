@@ -1,8 +1,9 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { getHealth } from './api'
+import { getHealth, setTUIMode } from './api'
 
 const health = ref(null)
+const tuiEnabled = ref(true)
 let healthTimer = null
 
 const fetchHealth = async () => {
@@ -11,6 +12,16 @@ const fetchHealth = async () => {
     health.value = data
   } catch {
     // Backend not available during dev — ignore.
+  }
+}
+
+const toggleTUI = async () => {
+  try {
+    tuiEnabled.value = !tuiEnabled.value
+    await setTUIMode(tuiEnabled.value)
+  } catch {
+    // Revert on error
+    tuiEnabled.value = !tuiEnabled.value
   }
 }
 
@@ -56,6 +67,16 @@ onUnmounted(() => {
           <span>Alerts</span>
         </el-menu-item>
       </el-menu>
+      <div class="tui-toggle" @click="toggleTUI">
+        <el-icon><Monitor /></el-icon>
+        <span>TUI {{ tuiEnabled ? 'ON' : 'OFF' }}</span>
+        <el-switch
+          v-model="tuiEnabled"
+          size="small"
+          @click.stop
+          @change="toggleTUI"
+        />
+      </div>
       <div class="health-bar" v-if="health">
         <el-tag type="success" size="small">
           {{ health.connected_agents }} agents
@@ -115,6 +136,17 @@ html, body, #app {
   background: rgba(96,165,250,0.15);
   color: #60a5fa;
 }
+.tui-toggle {
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #c0c0c0;
+  border-top: 1px solid #2d2d44;
+}
+.tui-toggle:hover { color: #60a5fa; }
 .health-bar {
   padding: 12px 16px;
   display: flex;

@@ -10,6 +10,7 @@ type WatchOptions struct {
 	Opts                         string
 	DebugOutput                  bool
 	JsonOutput                   string
+	NoTUI                        bool // --no-tui: disable TUI, run as background agent
 	MaxRecordContentDisplayBytes int
 	MaxRecords                   int
 	TraceDevEvent                bool
@@ -33,5 +34,5 @@ func (w *WatchOptions) Init() {
 }
 
 func (w *WatchOptions) UseTui() bool {
-	return !w.DebugOutput && w.JsonOutput == ""
+	return !w.DebugOutput && w.JsonOutput == "" && !w.NoTUI
 }

@@ -21,6 +21,7 @@ import (
 	"kyanos/bpf"
 	"kyanos/bpf/loader"
 	"kyanos/common"
+	"kyanos/console"
 	"kyanos/proto/agentpb"
 	"kyanos/version"
 	"net"
@@ -147,6 +148,72 @@ func SetupAgent(options ac.AgentOptions) {
 		// diagnostic sessions in real time via the 'd' hotkey.
 		if options.WatchOptions.UseTui() {
 			options.WatchOptions.DiagTracker = &sessionTrackerDiagAdapter{tracker: sessionTracker}
+		}
+	}
+
+	// Embedded Web Console (--webui). Starts Console in-process so the Agent
+	// is self-contained: gRPC + HTTP + frontend in a single binary.
+	if options.WebUIEnable {
+		httpAddr := options.WebUIHTTPAddr
+		if httpAddr == "" {
+			httpAddr = ":8080"
+		}
+		// Derive gRPC addr: offset HTTP port by 1
+		grpcAddr := ":50051"
+		if httpAddr != "" {
+			// Parse port from addr like ":8080"
+			if host, port, err := net.SplitHostPort(httpAddr); err == nil {
+				var p int
+				fmt.Sscanf(port, "%d", &p)
+				if p > 0 {
+					grpcAddr = fmt.Sprintf("%s:%d", host, p+1)
+				}
+			}
+		}
+
+		consCfg := console.Config{
+			GRPCListenAddr: grpcAddr,
+			HTTPListenAddr: httpAddr,
+		}
+		embeddedConsole := console.New(consCfg)
+
+		// Enable static file serving for the Vue frontend.
+		distDir := "console/frontend/dist"
+		if _, err := os.Stat(distDir); err == nil {
+			embeddedConsole.API().EnableStaticFiles(distDir)
+			common.AgentLog.Infof("Serving frontend from %s", distDir)
+		} else {
+			common.AgentLog.Warnf("Frontend dist not found at %s (run 'npm run build' in console/frontend)", distDir)
+		}
+
+		// Register TUI mode callback so the Console can toggle TUI remotely.
+		console.TUIModeChanger = func(enabled bool) {
+			options.WatchOptions.NoTUI = !enabled
+			if enabled {
+				common.AgentLog.Info("TUI mode enabled (remote toggle)")
+			} else {
+				common.AgentLog.Info("TUI mode disabled (remote toggle)")
+			}
+		}
+
+		go func() {
+			if err := embeddedConsole.Start(options.Ctx); err != nil {
+				common.AgentLog.Warnf("embedded Console exited: %v", err)
+			}
+		}()
+
+		// Auto-configure Agent to connect to the embedded Console.
+		options.GRPCServer = grpcAddr
+		common.AgentLog.Infof("Embedded Web Console started: HTTP=%s gRPC=%s", httpAddr, grpcAddr)
+
+		// Auto-open browser if requested.
+		if options.WebUIOpenBrowser {
+			go func() {
+				// Wait a moment for servers to start
+				time.Sleep(1 * time.Second)
+				url := fmt.Sprintf("http://localhost%s", httpAddr)
+				openBrowser(url)
+			}()
 		}
 	}
 

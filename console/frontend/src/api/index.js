@@ -30,4 +30,8 @@ export const getTopology = () => api.get('/topology')
 
 export const getHealth = () => api.get('/health')
 
+// --- Agent Control ---
+
+export const setTUIMode = (enabled) => api.post('/agent/tui-mode', { enabled })
+
 export default api

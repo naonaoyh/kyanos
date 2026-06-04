@@ -97,6 +97,12 @@ type AgentOptions struct {
 	COSPrefix    string
 	COSDeleteRaw bool // delete local file after successful upload
 
+	// WebUI embedded Console configuration.
+	WebUIEnable      bool   // --webui: start embedded Console in Agent process
+	WebUIHTTPAddr    string // --webui-addr: HTTP address for embedded Console
+	WebUIGRPCAddr    string // auto-derived from WebUIHTTPAddr (offset by 1)
+	WebUIOpenBrowser bool   // --open-browser: auto-open browser
+
 	// GRPCServer is the Control Plane / Console address (host:port) supplied via
 	// the --grpc-server flag. An empty value (the default zero value) keeps the
 	// Agent in Standalone_CLI_Mode: no gRPC_Client is constructed and behaviour

@@ -218,6 +218,26 @@ func applyPcapOptions(cmd *cobra.Command) {
 	}
 }
 
+// applyWebUIOptions reads the --no-tui, --webui, --webui-addr, --open-browser
+// flags and populates the corresponding AgentOptions fields.
+func applyWebUIOptions(cmd *cobra.Command) {
+	if cmd.Flags().Lookup("no-tui") == nil {
+		return
+	}
+	if v, err := cmd.Flags().GetBool("no-tui"); err == nil && v {
+		options.WatchOptions.NoTUI = true
+	}
+	if v, err := cmd.Flags().GetBool("webui"); err == nil && v {
+		options.WebUIEnable = true
+	}
+	if v, err := cmd.Flags().GetString("webui-addr"); err == nil && v != "" {
+		options.WebUIHTTPAddr = v
+	}
+	if v, err := cmd.Flags().GetBool("open-browser"); err == nil && v {
+		options.WebUIOpenBrowser = true
+	}
+}
+
 // initGRPCOptions reads the shared gRPC control-plane persistent flags
 // (registered by root.go init) and populates options.GRPCOptions. When
 // --grpc-server is empty (the default), GRPCOptions stays at its zero value and
@@ -316,6 +336,14 @@ func addSessionDiagnosisFlags(cmd *cobra.Command) {
 		"COS object key prefix (e.g. 'captures/agent-01')")
 	cmd.Flags().Bool("cos-delete-raw", false,
 		"Delete local pcap file after successful COS upload")
+	cmd.Flags().Bool("no-tui", false,
+		"Disable TUI, run as background agent (logger output only)")
+	cmd.Flags().Bool("webui", false,
+		"Start embedded Web Console (Agent + Console + frontend in one process)")
+	cmd.Flags().String("webui-addr", ":8080",
+		"HTTP address for embedded Web Console (default :8080)")
+	cmd.Flags().Bool("open-browser", false,
+		"Auto-open browser when --webui is enabled")
 }
 
 func InitLog() {

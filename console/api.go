@@ -85,7 +85,30 @@ func (h *APIHandler) registerRoutes() {
 
 	// Health check.
 	h.mux.HandleFunc("GET /api/v1/health", h.health)
+
+	// Agent TUI control (for embedded mode).
+	h.mux.HandleFunc("POST /api/v1/agent/tui-mode", h.setTUIMode)
 }
+
+// EnableStaticFiles registers a catch-all handler that serves the Vue frontend
+// from the given directory. Must be called after registerRoutes so API routes
+// take precedence.
+func (h *APIHandler) EnableStaticFiles(distDir string) {
+	fs := http.FileServer(http.Dir(distDir))
+	h.mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		// If the file exists, serve it directly. Otherwise serve index.html (SPA fallback).
+		path := filepath.Join(distDir, r.URL.Path)
+		if _, err := os.Stat(path); err == nil {
+			fs.ServeHTTP(w, r)
+			return
+		}
+		http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
+	})
+}
+
+// TUIModeChanger is an optional callback set by the Agent to allow the Console
+// to toggle the Agent's TUI mode remotely.
+var TUIModeChanger func(enabled bool)
 
 // --- JSON helpers ---
 
@@ -478,6 +501,24 @@ func (h *APIHandler) health(w http.ResponseWriter, r *http.Request) {
 		"connected_agents": len(h.grpc.ConnectedAgents()),
 		"active_sessions":  h.store.ActiveSessionCount(),
 		"ws_subscribers":   h.hub.TotalSubscriberCount(),
+	})
+}
+
+func (h *APIHandler) setTUIMode(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if TUIModeChanger == nil {
+		writeError(w, http.StatusServiceUnavailable, "TUI mode control not available (not in embedded mode)")
+		return
+	}
+	TUIModeChanger(req.Enabled)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tui_enabled": req.Enabled,
 	})
 }
 
