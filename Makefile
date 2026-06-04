@@ -54,7 +54,8 @@ $(LIBBPF_OBJ): $(wildcard $(LIBBPF_SRC)/*.[ch] $(LIBBPF_SRC)/Makefile) | $(OUTPU
 	$(call msg,LIB,$@)
 	$(Q)$(MAKE) -C $(LIBBPF_SRC) BUILD_STATIC_ONLY=1		      \
 		    OBJDIR=$(dir $@)/libbpf DESTDIR=$(dir $@)		      \
-		    INCLUDEDIR= LIBDIR= UAPIDIR=			      \
+		    INCLUDEDIR= LIBDIR= UAPIDIR=bpf			      \
+		    EXTRA_CFLAGS="-Wno-discarded-qualifiers -Wno-unknown-warning-option" \
 		    install
 
 # Build bpftool
