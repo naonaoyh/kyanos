@@ -89,6 +89,22 @@ btfgen:
 # keep intermediate (.skel.h, .bpf.o, etc) targets
 .SECONDARY:
 
+# Generate Go bindings from proto/agent.proto using the .protogen helper.
+# Requires protoc-gen-go and protoc-gen-go-grpc on PATH, or pre-built plugin
+# binaries in .protogen_bin/. The generated files are committed so that
+# GOOS=linux build does not require protoc or the plugins (Requirement 9.3).
+#
+# Usage:
+#   make generate-proto                     # uses .protogen_bin/ plugins
+#   make generate-proto PROTOC_GEN_GO=protoc-gen-go PROTOC_GEN_GO_GRPC=protoc-gen-go-grpc
+PROTOC_GEN_GO ?= $(abspath .protogen_bin/protoc-gen-go$(shell go env GOEXE))
+PROTOC_GEN_GO_GRPC ?= $(abspath .protogen_bin/protoc-gen-go-grpc$(shell go env GOEXE))
+
+.PHONY: generate-proto
+generate-proto:
+	cd .protogen && go run . proto/agent.proto .. $(PROTOC_GEN_GO) module=kyanos ..
+	cd .protogen && go run . proto/agent.proto .. $(PROTOC_GEN_GO_GRPC) module=kyanos ..
+
 .PHONY: test
 test: test-go
 

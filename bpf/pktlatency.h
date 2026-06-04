@@ -116,6 +116,7 @@ enum control_value_index_t {
   kSideFilter, // 0-all 1-server 2-client
   kNumControlValues,
   kTraceProtocol,// see traffic_protocol_t
+  kEnableFilterByCgroup, // when set, filter_cgroup_map is consulted (gRPC Pod-resolution mode)
 };
 
 enum message_type_t { kUnknown, kRequest, kResponse };

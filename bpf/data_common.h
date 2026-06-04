@@ -38,6 +38,15 @@ struct {
     __type(value, u8);
 } filter_pid_map SEC(".maps");
 
+// Cgroup_Whitelist: when kEnableFilterByCgroup is set in control_values, only
+// events from cgroup IDs present in this map are emitted. Inert in
+// Standalone_CLI_Mode. Populated by the gRPC control-plane PodResolver.
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(key_size, sizeof(__u64));
+    __uint(value_size, sizeof(__u8));
+    __uint(max_entries, 4096);
+} filter_cgroup_map SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);

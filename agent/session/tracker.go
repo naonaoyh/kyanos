@@ -27,6 +27,12 @@ type SessionTracker struct {
 
 	// Listeners notified on session lifecycle events.
 	listeners []SessionListener
+
+	// eventListeners receive granular, real-time diagnostic events (Phase 7).
+	// Additive: the existing listeners slice is left untouched; the tracker
+	// fires BOTH the lifecycle SessionListener callbacks and these granular
+	// SessionEventListener callbacks.
+	eventListeners []SessionEventListener
 }
 
 // TrackerConfig tunes the tracker behaviour.
@@ -99,6 +105,16 @@ func (t *SessionTracker) AddListener(l SessionListener) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.listeners = append(t.listeners, l)
+}
+
+// AddEventListener registers a granular, real-time event listener (Phase 7).
+// This is additive to AddListener: a registered SessionEventListener receives
+// per-event auth/GGA/RTCM/network/close callbacks, while existing
+// SessionListeners continue to receive only the lifecycle callbacks.
+func (t *SessionTracker) AddEventListener(l SessionEventListener) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.eventListeners = append(t.eventListeners, l)
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +232,11 @@ func (t *SessionTracker) OnConnectionClose(conn *ConnInfo, closeTime time.Time, 
 		)
 
 		t.notifyClosed(s)
+
+		// Fire granular session-close event to real-time listeners (Phase 7).
+		// This fires regardless of whether the session had any prior auth/GGA/RTCM/
+		// network events, satisfying Requirement 4.6.
+		t.notifyEventClose(s)
 	}
 }
 
@@ -319,7 +340,6 @@ func (t *SessionTracker) handleNTRIPRequest(req *ntrip.NTRIPRequest, resp protoc
 	s := t.getOrCreateSession(clientIP, clientPort, mountPoint, req.Username, conn.ServerIP(), reqTime)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	// Track last activity
 	s.LastActivityTime = reqTime
@@ -359,6 +379,11 @@ func (t *SessionTracker) handleNTRIPRequest(req *ntrip.NTRIPRequest, resp protoc
 			}
 		}
 	}
+
+	s.mu.Unlock()
+
+	// Fire granular auth event to real-time listeners (Phase 7).
+	t.notifyAuthEvent(s)
 }
 
 func (t *SessionTracker) handleNMEASentence(nmea *ntrip.NTRIPNMEASentence, conn *ConnInfo) {
@@ -377,9 +402,12 @@ func (t *SessionTracker) handleNMEASentence(nmea *ntrip.NTRIPNMEASentence, conn 
 		s = t.getOrCreateSession(clientIP, clientPort, "_unknown_", "", conn.ServerIP(), ts)
 	}
 
-	s.AddGGAEvent(ts, nmea.Latitude, nmea.Longitude,
+	ggaEvent := s.AddGGAEvent(ts, nmea.Latitude, nmea.Longitude,
 		nmea.FixQuality, nmea.NumSatellites, nmea.HDOP,
 		nmea.DiffAge, nmea.DiffStationID, nmea.UTCTime)
+
+	// Fire granular GGA event to real-time listeners (Phase 7).
+	t.notifyGGAEvent(s, ggaEvent)
 }
 
 func (t *SessionTracker) handleRTCMFrame(frame *rtcm.RTCMFrame, conn *ConnInfo) {
@@ -399,7 +427,10 @@ func (t *SessionTracker) handleRTCMFrame(frame *rtcm.RTCMFrame, conn *ConnInfo) 
 		epochTime = rtcm.EpochToUTC(epochMs, frame.MessageType, ts)
 	}
 
-	s.AddRTCMFrame(ts, frame.MessageType, frame.TotalLen, frame.CRCValid, epochTime)
+	rtcmEvent := s.AddRTCMFrame(ts, frame.MessageType, frame.TotalLen, frame.CRCValid, epochTime)
+
+	// Fire granular RTCM event to real-time listeners (Phase 7).
+	t.notifyRTCMEvent(s, rtcmEvent)
 }
 
 // ---------------------------------------------------------------------------
@@ -425,15 +456,17 @@ func (t *SessionTracker) OnTCPRetransmission(conn *ConnInfo, ts time.Time, seq u
 	if analyzer == nil {
 		// Fall back to simple counter
 		s.AddRetransmission()
-		return
+	} else {
+		analyzer.RecordRetransmission(ts, seq, size)
+
+		// Also update recent retrans count for disconnect classification
+		s.mu.Lock()
+		s.recentRetransCount++
+		s.mu.Unlock()
 	}
 
-	analyzer.RecordRetransmission(ts, seq, size)
-
-	// Also update recent retrans count for disconnect classification
-	s.mu.Lock()
-	s.recentRetransCount++
-	s.mu.Unlock()
+	// Fire granular network event to real-time listeners (Phase 7).
+	t.notifyNetworkEvent(s, NetworkEventRetransmission)
 }
 
 // OnTCPRoundTripTime records an RTT observation for the session.
@@ -456,6 +489,9 @@ func (t *SessionTracker) OnTCPRoundTripTime(conn *ConnInfo, rtt time.Duration, s
 	}
 	// Also record in session's simple RTT tracker
 	s.AddRTT(rtt)
+
+	// Fire granular network event to real-time listeners (Phase 7).
+	t.notifyNetworkEvent(s, NetworkEventRTTSample)
 }
 
 // OnTCPWindowChange records a TCP window size change for the session.
@@ -476,6 +512,9 @@ func (t *SessionTracker) OnTCPWindowChange(conn *ConnInfo, windowSize int, ts ti
 	if analyzer != nil {
 		analyzer.UpdateWindow(windowSize, ts)
 	}
+
+	// Fire granular network event to real-time listeners (Phase 7).
+	t.notifyNetworkEvent(s, NetworkEventWindowChange)
 }
 
 // OnTCPRetansmitWithPacket records a packet observation using the sequence
@@ -606,6 +645,60 @@ func (t *SessionTracker) notifyClosed(s *NTRIPSession) {
 	t.mu.RUnlock()
 	for _, l := range listeners {
 		l.OnSessionClosed(s)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Granular event listener notification helpers (Phase 7)
+// ---------------------------------------------------------------------------
+
+func (t *SessionTracker) notifyAuthEvent(s *NTRIPSession) {
+	t.mu.RLock()
+	els := make([]SessionEventListener, len(t.eventListeners))
+	copy(els, t.eventListeners)
+	t.mu.RUnlock()
+	for _, l := range els {
+		l.OnAuthEvent(s)
+	}
+}
+
+func (t *SessionTracker) notifyGGAEvent(s *NTRIPSession, e GGAEvent) {
+	t.mu.RLock()
+	els := make([]SessionEventListener, len(t.eventListeners))
+	copy(els, t.eventListeners)
+	t.mu.RUnlock()
+	for _, l := range els {
+		l.OnGGAEvent(s, e)
+	}
+}
+
+func (t *SessionTracker) notifyRTCMEvent(s *NTRIPSession, e RTCMEvent) {
+	t.mu.RLock()
+	els := make([]SessionEventListener, len(t.eventListeners))
+	copy(els, t.eventListeners)
+	t.mu.RUnlock()
+	for _, l := range els {
+		l.OnRTCMEvent(s, e)
+	}
+}
+
+func (t *SessionTracker) notifyNetworkEvent(s *NTRIPSession, kind NetworkEventKind) {
+	t.mu.RLock()
+	els := make([]SessionEventListener, len(t.eventListeners))
+	copy(els, t.eventListeners)
+	t.mu.RUnlock()
+	for _, l := range els {
+		l.OnNetworkEvent(s, kind)
+	}
+}
+
+func (t *SessionTracker) notifyEventClose(s *NTRIPSession) {
+	t.mu.RLock()
+	els := make([]SessionEventListener, len(t.eventListeners))
+	copy(els, t.eventListeners)
+	t.mu.RUnlock()
+	for _, l := range els {
+		l.OnSessionClose(s)
 	}
 }
 

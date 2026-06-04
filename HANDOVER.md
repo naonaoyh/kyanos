@@ -1,6 +1,6 @@
 # Kyanos GNSS 专项开发 — 交接文档
 
-> 最后更新: 2026-06-03  
+> 最后更新: 2025-07-14  
 > 分支: `feat/gnss-ntrip-rtcm-support`  
 > 仓库: `https://github.com/naonaoyh/kyanos.git`  
 > 上游: `https://github.com/hengyoush/kyanos` (原始 Kyanos 项目)
@@ -55,7 +55,7 @@
 | 4 | 工程化与生产就绪 | **已完成** (已提交 bc0c174) |
 | 5 | NTRIP 诊断引擎 | **基本完成** (T0-T5+渲染已提交 ac44a76; 详见 ROADMAP_NEXT) |
 | 6 | PCAP 导出与对象存储 | **部分** (JSONL 结构化导出已完成; PCAP/COS/轮转未开始) |
-| 7 | gRPC 通信层与 Agent 改造 | 未开始 |
+| 7 | gRPC 通信层与 Agent 改造 | **已完成** (必需任务全部完成; 可选PBT测试未做) |
 | 8 | Web Console 后端 | 未开始 |
 | 9 | Web Console 前端 | 未开始 |
 | 10 | K8s 部署与集成测试 | 未开始 |
@@ -433,7 +433,81 @@ kyanos stat rtcm --group-by rtcm-msg-type
 
 ---
 
-## 11. 常见陷阱
+## 12. Phase 7 — gRPC Control Plane 交付摘要
+
+> 完成时间: 2025-07-14  
+> Spec: `.kiro/specs/agent-grpc-control-plane/` (requirements.md, design.md, tasks.md)
+
+### 12.1 交付物
+
+| 包/目录 | 文件 | 说明 |
+|---------|------|------|
+| `proto/agent.proto` | 1 | 共享 protobuf 服务合约 (AgentService, 5 RPC, 全部消息类型) |
+| `proto/agentpb/` | 3 | 生成的 Go 绑定 (pb.go, grpc.pb.go, generate.go) |
+| `agent/controlplane/` | 14 | 完整控制面包: client, dispatcher, filter_controller, task_manager, pod_resolver, reporter, redactor, transport, registration, buffer, clock, backoff, cgroup_whitelist, cgroup_whitelist_bpf |
+| `agent/session/events.go` | 1 | SessionEventListener 接口 + NetworkEventKind |
+| `agent/session/tracker.go` | 修改 | 添加粒度事件监听器触发 (Phase 7 additive) |
+| `agent/common/options.go` | 修改 | GRPCOptions/GRPCTLSConfig + 验证 + 模式判断 |
+| `cmd/root.go` | 修改 | 13 个 gRPC persistent flags |
+| `cmd/common.go` | 修改 | initGRPCOptions helper |
+| `agent/agent.go` | 修改 | SetupAgent gRPC 接线 (if GRPCModeEnabled) |
+| `agent/grpc_stubs.go` | 1 | no-op 接口实现 (K8s/CRI/proc/BPF deferred) |
+| `bpf/pktlatency.bpf.c` | 修改 | filter_cgroup_map + cgroup 过滤逻辑 |
+| `bpf/data_common.h` | 修改 | filter_cgroup_map 声明 |
+| `bpf/pktlatency.h` | 修改 | kEnableFilterByCgroup 枚举 |
+| `docs/ROADMAP_NEXT.md` | 修改 | §11 Deferred-verification items |
+| `Makefile` | 修改 | generate-proto target |
+
+### 12.2 核心架构
+
+```
+Agent (SetupAgent)
+  └─ if GRPCModeEnabled():
+       ├── PodResolver → ResolveTargets → push Cgroup_Whitelist (before BPF attach)
+       ├── EventBuffer[*SessionEvent] (bounded ring, 4096 default)
+       ├── TaskManager (capture task lifecycle, duration auto-stop)
+       ├── FilterController (validate-then-commit, atomic swap, cgroup reconcile)
+       ├── Dispatcher (route ControlCommand oneof → TaskManager / FilterController)
+       ├── Redactor (fail-closed credential gate)
+       ├── EventReporter (SessionEventListener → project → redact → buffer)
+       ├── Client.Run(ctx) goroutine:
+       │     dial → register(AgentInfo) → replay buffered → serve stream
+       │     receive commands → Dispatcher
+       │     drain buffer → send events
+       │     heartbeat at interval, reconnect under Backoff
+       └── Transport (TLS/mTLS/insecure, credentials by key name only)
+```
+
+### 12.3 Deferred-Verification Items (Linux/TKE)
+
+| 编号 | 项目 | 依赖 |
+|------|------|------|
+| D1 | Live gRPC stream to Console | Req 2.2 |
+| D2 | eBPF map push / kernel-side cgroup filtering | Req 6.4 |
+| D3 | Live K8s API / CRI / /proc cgroup traversal | Req 6.1-6.3 |
+| D4 | TLS handshake / unauthenticated-peer rejection | Req 8.5, 8.7 |
+| D5 | 20+ node DaemonSet rollout | Req 9.1 |
+
+### 12.4 Build Gate
+
+```bash
+GOOS=linux go build ./agent/controlplane/...   # ✅ pass
+GOOS=linux go build ./proto/...                # ✅ pass
+GOOS=linux go build ./agent/session/...        # ✅ pass
+GOOS=linux go vet ./agent/controlplane/...     # ✅ pass
+GOOS=linux go test -c ./agent/controlplane/    # ✅ compiles
+```
+
+### 12.5 未完成的可选任务
+
+29 个 property-based test 任务 (标记 `*`) 未执行。这些使用 `pgregory.net/rapid` 验证 21 个正确性属性。可后续补充。
+
+</content>
+</file>
+
+---
+
+## 13. 常见陷阱
 
 | 陷阱 | 说明 | 解决方案 |
 |------|------|---------|

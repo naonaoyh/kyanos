@@ -609,3 +609,81 @@ T1b / T6 / T7 标记为 ⚠️LINUX，待环境恢复
 sudo kyanos watch ntrip --diag --diag-jsonl sessions.jsonl
 sudo kyanos watch ntrip --diag --diag-report --diag-jsonl out.jsonl --pod-load
 ```
+
+
+---
+
+## 11. Phase 7 — Deferred-Verification Items (Linux/TKE Backlog)
+
+> 来源: Phase 7 设计文档 (agent-grpc-control-plane spec), Requirement 9.4
+> 状态: 待验证 — 需要真实 Linux 内核、gRPC 对端、K8s 集群环境
+
+Phase 7 将独立 CLI Agent 升级为可远程控制的节点 Agent（gRPC 双向流、任务下发、
+事件上报、Pod 身份解析、连接容灾）。设计将所有 live 依赖隔离在接口后面，
+使纯逻辑核心（事件投影、凭据脱敏、环形缓冲、退避、集合调和、proto 往返、命令路由）
+在当前开发工作站上可编译、可测试。
+
+以下验收标准**无法在当前环境验证**，需在 Linux/TKE 环境可用后补做：
+
+### 11.1 Live gRPC Stream (Requirement 2.2)
+
+| 项 | 说明 |
+|----|------|
+| 验收标准 | Registration 成功后建立双向 gRPC_Stream，接收 ControlCommand 并上报 SessionEvent |
+| 依赖 | 活跃的 gRPC Console 对端 |
+| 验证方式 | 启动 Agent（`--grpc-server`）对接真实/mock Console，确认 Connect RPC 成功、command 流畅通、event 流到达 Console |
+| 当前状态 | `Client.Run` 逻辑完成，in-process 单元测试通过；live 对端验证待补 |
+
+### 11.2 eBPF Map Push / Kernel-Side Filtering (Requirement 6.4)
+
+| 项 | 说明 |
+|----|------|
+| 验收标准 | PodResolver 解析出目标 cgroup ID 后，将 Cgroup_Whitelist 推送到 `filter_cgroup_map` BPF map，内核侧仅放行白名单内的 cgroup 事件 |
+| 依赖 | Linux 内核 eBPF 运行时、`make build-bpf` 重新生成 Go 绑定 |
+| 验证方式 | (1) `make build-bpf && make` 成功编译带新 map 的 BPF 程序；(2) 实跑 Agent，写入 cgroup ID 到 map 并确认非白名单事件被丢弃 |
+| 当前状态 | `filter_cgroup_map` 已定义在 `bpf/pktlatency.bpf.c`；`CgroupWhitelist` 接口 + 纯集合调和逻辑已实现并测试；concrete map-backed binding (`cgroup_whitelist_bpf.go`) 已编写但需 Linux 环境验证 |
+
+### 11.3 Live K8s API / CRI / `/proc` Cgroup Traversal (Requirements 6.1–6.3)
+
+| 项 | 说明 |
+|----|------|
+| 验收标准 6.1 | PodResolver 通过 K8s API 列出目标 namespace + label selector 匹配的 Pods |
+| 验收标准 6.2 | PodResolver 通过容器运行时（CRI/containerd/docker）获取 Pod 的容器 ID |
+| 验收标准 6.3 | PodResolver 通过 `/proc` cgroup 遍历将容器 ID 映射为 cgroup ID |
+| 依赖 | 活跃的 K8s 集群（TKE）、容器运行时 socket、Linux `/proc` 文件系统 |
+| 验证方式 | 在 TKE 节点上运行 Agent（`--grpc-pod-resolve --grpc-namespace=<ns> --grpc-selector=<labels>`），确认 PodResolver 能端到端解析出 PodInfo（Pod name、IP、namespace、node、container IDs、cgroup IDs） |
+| 当前状态 | `PodLister`/`ContainerLister`/`CgroupMapper` 接口已定义；`PodResolver` 纯逻辑（缓存、容错、回退）已实现并用 fake 测试通过；live K8s/CRI/proc 实现待补 |
+
+### 11.4 TLS Handshake / Unauthenticated-Peer Rejection (Requirements 8.5, 8.7)
+
+| 项 | 说明 |
+|----|------|
+| 验收标准 8.5 | 当配置的凭据无效时，Agent 允许底层传输连接建立，但拒绝在其上建立 gRPC_Stream |
+| 验收标准 8.7 | Agent 仅接受已认证 gRPC_Stream 上的 ControlCommand，未认证对端的命令被拒绝 |
+| 依赖 | 真实 TLS 对端（Console 或 mock server with TLS） |
+| 验证方式 | (1) 使用无效证书启动 Agent，确认 transport 连接成功但 stream 被拒；(2) 用未认证客户端发送 ControlCommand，确认 Agent 拒绝处理 |
+| 当前状态 | `buildTransport` 逻辑实现了三模式选择（authenticated-encrypted / encrypted-only / error-on-missing）；属性测试覆盖模式选择逻辑；live TLS 握手验证待补 |
+
+### 11.5 20+ Node DaemonSet Rollout (Requirement 9.1)
+
+| 项 | 说明 |
+|----|------|
+| 验收标准 | Agent 作为节点级进程，适合 DaemonSet 部署跨 20+ 节点，每个 Agent 以 node name 寻址 |
+| 依赖 | 腾讯云 TKE 集群（20+ worker 节点）、Cloud LB、DaemonSet manifest |
+| 验证方式 | (1) 部署 DaemonSet（含 `--grpc-server` 配置）到 20+ 节点 TKE 集群；(2) 确认所有 Agent 注册到 Console 并可独立寻址；(3) 验证滚动更新不丢失事件（利用 Local_Event_Buffer replay） |
+| 当前状态 | Agent 设计为节点级进程（registration 携带 node_name 作为唯一标识）；Local_Event_Buffer + replay 机制已实现；规模化部署验证待补 |
+
+### 11.6 验证执行计划
+
+```
+环境恢复后执行顺序:
+
+1. make build-bpf && make              → 确认 Phase 7 代码 + BPF map 编译通过
+2. 单节点 Agent + mock Console         → 验证 11.1 (live stream) + 11.4 (TLS)
+3. 单节点 Agent + 真实 K8s             → 验证 11.3 (Pod 解析) + 11.2 (BPF map push)
+4. 多节点 TKE + Cloud LB + Console     → 验证 11.5 (DaemonSet rollout)
+```
+
+> **注意**: 以上所有验证项的纯逻辑部分（退避算法、环形缓冲、集合调和、事件投影、
+> 凭据脱敏、命令路由、任务状态机）已通过属性测试 + 单元测试在当前环境验证通过。
+> deferred 的仅是 live 基础设施交互层。

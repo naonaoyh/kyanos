@@ -9,6 +9,7 @@ import (
 	ac "kyanos/agent/common"
 	"kyanos/agent/compatible"
 	"kyanos/agent/conn"
+	"kyanos/agent/controlplane"
 	"kyanos/agent/protocol"
 	loader_render "kyanos/agent/render/loader"
 	"kyanos/agent/render/stat"
@@ -17,6 +18,7 @@ import (
 	"kyanos/bpf"
 	"kyanos/bpf/loader"
 	"kyanos/common"
+	"kyanos/proto/agentpb"
 	"kyanos/version"
 	"os"
 	"os/exec"
@@ -61,7 +63,12 @@ func SetupAgent(options ac.AgentOptions) {
 		common.AgentLog.Warnf("Your terminal does not support 256 colors, ui may display incorrectly")
 	}
 
-	options = ac.ValidateAndRepairOptions(options)
+	if validatedOptions, err := ac.ValidateAndRepairOptions(options); err != nil {
+		common.AgentLog.Errorf("invalid options: %v", err)
+		return
+	} else {
+		options = validatedOptions
+	}
 	common.LaunchEpochTime = GetMachineStartTimeNano()
 	stopper := options.Stopper
 	connManager := conn.InitConnManager()
@@ -143,6 +150,123 @@ func SetupAgent(options ac.AgentOptions) {
 		}
 		statRecorder.RemoveRecord(c.TgidFd)
 		return nil
+	}
+
+	// -------------------------------------------------------------------------
+	// gRPC control-plane subsystem (Phase 7). Constructed ONLY when
+	// --grpc-server is provided; otherwise nil/inactive and the Agent operates
+	// in Standalone_CLI_Mode with behaviour identical to Phases 1–6.
+	// Requirements: 1.1, 1.2, 1.3, 1.6, 2.2, 6.9
+	// -------------------------------------------------------------------------
+	if options.GRPCModeEnabled() {
+		common.AgentLog.Info("gRPC control-plane mode enabled; connecting to Console at ", options.GRPCServer)
+
+		// -- PodResolver (if Pod resolution is enabled) --
+		// Constructed before BPF attach so the initial Cgroup_Whitelist is pushed
+		// to the BPF map and the kernel filters from the very first event (Req 6.9).
+		var podResolver *controlplane.PodResolver
+		if options.PodResolutionEnabled() {
+			// NOTE: In the full integration the PodLister/ContainerLister/CgroupMapper
+			// and CgroupWhitelist will be concrete implementations backed by the K8s
+			// API, container runtime, /proc, and BPF map respectively. For now, we
+			// construct the resolver with no-op stubs so the wiring compiles and the
+			// live path is a deferred-verification item.
+			podResolver = controlplane.NewPodResolver(controlplane.PodResolverConfig{
+				K8s:       noopPodLister{},
+				Runtime:   noopContainerLister{},
+				Cgroups:   noopCgroupMapper{},
+				Whitelist: noopCgroupWhitelist{},
+				Namespace: options.GRPCOptions.Namespace,
+				Selector:  options.GRPCOptions.Selector,
+			})
+			if err := podResolver.ResolveTargets(ctx); err != nil {
+				// ResolveTargets logs and may enter fallback mode (Req 6.8).
+				// The Agent continues regardless.
+				common.AgentLog.Warnf("PodResolver: initial resolution failed (continuing): %v", err)
+			}
+		}
+
+		// -- Build the core control-plane components --
+		bufferCap := options.GRPCOptions.BufferCapacity
+		if bufferCap <= 0 {
+			bufferCap = 1000 // reasonable default
+		}
+		eventBuffer := controlplane.NewEventBuffer[*agentpb.SessionEvent](bufferCap)
+
+		taskMgr := controlplane.NewTaskManager(controlplane.NewRealClock())
+		filterCtl := controlplane.NewFilterController(controlplane.FilterControllerConfig{
+			Apply: func(f protocol.ProtocolFilter) {
+				// In the full integration this would hot-swap the active
+				// MessageFilter on the ProcessorManager. The concrete swap
+				// mechanism is a deferred-verification item (requires the
+				// ProcessorManager to expose a SetFilter method).
+				common.AgentLog.Debugf("controlplane: FilterController applied new MessageFilter (type %T)", f)
+			},
+			Whitelist:     noopCgroupWhitelist{},
+			Resolver:      podResolver,
+			Tasks:         taskMgr,
+			InitialFilter: options.MessageFilter,
+		})
+		dispatcher := controlplane.NewDispatcher(taskMgr, filterCtl)
+
+		// -- Transport credentials --
+		creds, err := controlplane.BuildTransport(options.GRPCOptions.TLS)
+		if err != nil {
+			common.AgentLog.Errorf("gRPC transport configuration failed: %v", err)
+			return
+		}
+
+		// -- Backoff --
+		backoffMax := options.GRPCOptions.BackoffMax
+		if backoffMax <= 0 {
+			backoffMax = 60 * time.Second
+		}
+		bo := controlplane.Backoff{
+			Base:   1 * time.Second,
+			Max:    backoffMax,
+			Factor: 2.0,
+		}
+
+		// -- Determine node name (Kubernetes NODE_NAME env var or hostname) --
+		nodeName := os.Getenv("NODE_NAME")
+		if nodeName == "" {
+			nodeName, _ = os.Hostname()
+		}
+
+		// -- Construct the Client --
+		cpClient := controlplane.NewClient(controlplane.ClientConfig{
+			Addr:              options.GRPCServer,
+			NodeName:          nodeName,
+			Version:           version.GetVersion(),
+			Creds:             creds,
+			Buffer:            eventBuffer,
+			Backoff:           bo,
+			Dispatcher:        dispatcher,
+			Clock:             nil, // uses real clock
+			Resolver:          podResolver,
+			HeartbeatInterval: options.GRPCOptions.HeartbeatInterval,
+			HeartbeatTimeout:  options.GRPCOptions.HeartbeatTimeout,
+		})
+
+		// -- EventReporter: register on the SessionTracker if it exists --
+		reporter := controlplane.NewEventReporter(controlplane.EventReporterConfig{
+			Tasks:    taskMgr,
+			Resolver: podResolver,
+			Redactor: &controlplane.Redactor{},
+			Out:      eventBuffer.Push,
+			Silent:   false,
+		})
+		if sessionTracker != nil {
+			sessionTracker.AddEventListener(reporter)
+			common.AgentLog.Info("gRPC EventReporter registered on SessionTracker")
+		}
+
+		// -- Launch Client.Run on a goroutine bound to ctx --
+		go func() {
+			if err := cpClient.Run(ctx); err != nil && ctx.Err() == nil {
+				common.AgentLog.Warnf("controlplane.Client.Run exited: %v", err)
+			}
+		}()
 	}
 
 	// Remove resource limits for kernels <5.11.

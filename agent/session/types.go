@@ -203,7 +203,12 @@ type GGAEvent struct {
 // AddGGAEvent appends a GGA event and computes the interval and distance from
 // the previous one. ggaUtcStr is the raw UTC time string from the GGA sentence
 // (format "hhmmss.ss"); pass "" if not available.
-func (s *NTRIPSession) AddGGAEvent(ts time.Time, lat, lon float64, fix, sats int, hdop float64, diffAge float64, diffStationID string, ggaUtcStr string) {
+//
+// It returns the GGAEvent that was appended so callers (e.g. the SessionTracker)
+// can forward the exact event to real-time listeners without re-reading the
+// session under lock. Existing callers that ignore the return value continue to
+// compile unchanged.
+func (s *NTRIPSession) AddGGAEvent(ts time.Time, lat, lon float64, fix, sats int, hdop float64, diffAge float64, diffStationID string, ggaUtcStr string) GGAEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -243,6 +248,8 @@ func (s *NTRIPSession) AddGGAEvent(ts time.Time, lat, lon float64, fix, sats int
 	s.lastGGALon = lon
 	s.LastActivityTime = ts
 	s.LastActivityType = "gga"
+
+	return s.GGAEvents[len(s.GGAEvents)-1]
 }
 
 // GGAIntervalAnomalies returns GGA events where the interval exceeds the threshold.
@@ -314,7 +321,12 @@ type RTCMInterruption struct {
 
 // AddRTCMFrame records a new RTCM frame arrival.
 // epochTime is the GNSS epoch time extracted from the RTCM payload (zero if unavailable).
-func (s *NTRIPSession) AddRTCMFrame(ts time.Time, msgType, size int, crcValid bool, epochTime time.Time) {
+//
+// It returns the RTCMEvent describing the frame so callers (e.g. the
+// SessionTracker) can forward the exact event to real-time listeners. The event
+// is returned even when it is not retained in the bounded RTCMEvents log.
+// Existing callers that ignore the return value continue to compile unchanged.
+func (s *NTRIPSession) AddRTCMFrame(ts time.Time, msgType, size int, crcValid bool, epochTime time.Time) RTCMEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -345,22 +357,26 @@ func (s *NTRIPSession) AddRTCMFrame(ts time.Time, msgType, size int, crcValid bo
 		s.rtcmLatencySamples = append(s.rtcmLatencySamples, latency)
 	}
 
+	event := RTCMEvent{
+		Timestamp:   ts,
+		EpochTime:   epochTime,
+		Latency:     latency,
+		MessageType: msgType,
+		Size:        size,
+		CRCValid:    crcValid,
+		Interval:    interval,
+	}
+
 	// Optionally keep in RTCMEvents (bounded to prevent memory blowup)
 	if len(s.RTCMEvents) < 100000 {
-		s.RTCMEvents = append(s.RTCMEvents, RTCMEvent{
-			Timestamp:   ts,
-			EpochTime:   epochTime,
-			Latency:     latency,
-			MessageType: msgType,
-			Size:        size,
-			CRCValid:    crcValid,
-			Interval:    interval,
-		})
+		s.RTCMEvents = append(s.RTCMEvents, event)
 	}
 
 	s.lastRTCMTime = ts
 	s.LastActivityTime = ts
 	s.LastActivityType = "rtcm"
+
+	return event
 }
 
 // RTCMInterruptions returns intervals exceeding the given threshold.

@@ -8,6 +8,8 @@
 *.so
 *.dylib
 *.o
+# Allow pre-built protoc-gen plugins (needed for make generate-proto)
+!.protogen_bin/*.exe
 __debug**
 node_modules/
 docs/.vitepress/dist

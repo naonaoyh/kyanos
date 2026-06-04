@@ -5,6 +5,7 @@ import (
 	"kyanos/agent/metadata/k8s"
 	"kyanos/common"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -96,6 +97,34 @@ func init() {
 	rootCmd.PersistentFlags().IntVar(&options.ConnPerfEventMapPageNum, "conn-perf-event-map-page-num", 4, "pageNum of eBPF map size for conn data events buffer")
 	rootCmd.PersistentFlags().IntVar(&options.KernPerfEventMapPageNum, "kern-perf-event-map-page-num", 32, "pageNum of eBPF map size for kern events buffer")
 	rootCmd.PersistentFlags().IntVar(&options.FirstPacketEventMapPageNum, "first-packet-event-map-page-num", 32, "pageNum of eBPF map size for first packet events buffer")
+
+	// gRPC control-plane mode (Phase 7, additive: all disabled by default)
+	rootCmd.PersistentFlags().StringVar(&options.GRPCServer, "grpc-server", "",
+		"Console address (host:port) to enable gRPC control-plane mode. Empty keeps Standalone_CLI_Mode.")
+	rootCmd.PersistentFlags().Bool("grpc-tls", false,
+		"Use authenticated, encrypted transport for the Console connection")
+	rootCmd.PersistentFlags().Bool("grpc-tls-insecure", false,
+		"Use encrypted transport but skip server certificate verification")
+	rootCmd.PersistentFlags().String("grpc-ca", "",
+		"Path to CA certificate bundle for Console connection verification")
+	rootCmd.PersistentFlags().String("grpc-cert", "",
+		"Path to client certificate for mutual TLS with the Console")
+	rootCmd.PersistentFlags().String("grpc-key", "",
+		"Path to client private key for mutual TLS with the Console")
+	rootCmd.PersistentFlags().Bool("grpc-pod-resolve", false,
+		"Enable PodResolver: map kernel events to K8s Pod identities")
+	rootCmd.PersistentFlags().String("grpc-namespace", "",
+		"Target Kubernetes namespace for Pod resolution (requires --grpc-pod-resolve)")
+	rootCmd.PersistentFlags().String("grpc-selector", "",
+		"Target Kubernetes label selector for Pod resolution (requires --grpc-pod-resolve)")
+	rootCmd.PersistentFlags().Int("grpc-buffer-capacity", 4096,
+		"Maximum number of SessionEvents retained in the local event buffer while disconnected")
+	rootCmd.PersistentFlags().Duration("grpc-backoff-max", 60*time.Second,
+		"Maximum backoff delay between reconnection attempts")
+	rootCmd.PersistentFlags().Duration("grpc-heartbeat", 15*time.Second,
+		"Interval between heartbeat keep-alives sent over the gRPC stream")
+	rootCmd.PersistentFlags().Duration("grpc-heartbeat-timeout", 10*time.Second,
+		"Timeout for heartbeat acknowledgment before treating the stream as lost")
 
 	// internal
 	rootCmd.PersistentFlags().BoolVar(&options.PerformanceMode, "performance-mode", true, "--performance false")

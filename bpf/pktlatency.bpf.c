@@ -106,6 +106,15 @@ static __always_inline int filter_netns(u32 ns) {
     return -1;
 }
 
+// filter_cgroup checks if the given cgroup ID is present in the cgroup whitelist.
+// Returns 0 if matched, -1 otherwise.
+static __always_inline int filter_cgroup(__u64 cgroup_id) {
+    if (bpf_map_lookup_elem(&filter_cgroup_map, &cgroup_id)) {
+        return 0;
+    }
+    return -1;
+}
+
 static __always_inline enum target_tgid_match_result_t match_trace_tgid(const uint32_t tgid) {
 	uint32_t idx = kEnableFilterByPid;
 	int64_t* target_tgid = bpf_map_lookup_elem(&control_values, &idx);
@@ -135,6 +144,20 @@ static __always_inline enum target_tgid_match_result_t match_trace_tgid(const ui
     if ((filter_pidns(pidns_id) == 0) || (filter_mntns(mntns_id) == 0) || (filter_netns(netns_id) == 0)) {
         should_filter = true;
     }
+
+    // Cgroup whitelist: when enabled via control_values, match by cgroup ID.
+    // Stays inert unless kEnableFilterByCgroup is set (Standalone_CLI_Mode).
+    if (!should_filter) {
+        uint32_t cgroup_idx = kEnableFilterByCgroup;
+        int64_t* cgroup_enabled = bpf_map_lookup_elem(&control_values, &cgroup_idx);
+        if (cgroup_enabled != NULL && *cgroup_enabled != 0) {
+            __u64 cgroup_id = bpf_get_current_cgroup_id();
+            if (filter_cgroup(cgroup_id) == 0) {
+                should_filter = true;
+            }
+        }
+    }
+
 	if (should_filter) {
     	u8 u8_zero = 0;
         bpf_map_update_elem(&filter_pid_map, &tgid, &u8_zero, BPF_NOEXIST);

@@ -74,6 +74,9 @@ func startAgent() {
 	options.ContainerName = ContainerName
 	options.PodName = PodName
 
+	// Populate GRPCOptions from persistent flags (no-op if --grpc-server is empty).
+	initGRPCOptions(rootCmd)
+
 	ac.Options = &options
 
 	InitLog()
@@ -184,6 +187,66 @@ func applyLeapSeconds(cmd *cobra.Command) {
 	if ls, err := cmd.Flags().GetInt("leap-seconds"); err == nil && ls > 0 {
 		rtcm.SetLeapSeconds(ls)
 	}
+}
+
+// initGRPCOptions reads the shared gRPC control-plane persistent flags
+// (registered by root.go init) and populates options.GRPCOptions. When
+// --grpc-server is empty (the default), GRPCOptions stays at its zero value and
+// the Agent remains in Standalone_CLI_Mode (additive, not replacing).
+//
+// This mirrors the addSessionDiagnosisFlags/initSessionDiagnosis pattern: flags
+// are registered centrally (root persistent flags) and the helper reads them
+// into the typed options struct before agent startup.
+func initGRPCOptions(cmd *cobra.Command) {
+	if options.GRPCServer == "" {
+		return
+	}
+
+	var grpcOpts ac.GRPCOptions
+
+	// TLS configuration
+	if v, err := cmd.Flags().GetBool("grpc-tls"); err == nil && v {
+		grpcOpts.TLS.Enable = true
+	}
+	if v, err := cmd.Flags().GetBool("grpc-tls-insecure"); err == nil && v {
+		grpcOpts.TLS.Insecure = true
+	}
+	if v, err := cmd.Flags().GetString("grpc-ca"); err == nil && v != "" {
+		grpcOpts.TLS.CAPath = v
+	}
+	if v, err := cmd.Flags().GetString("grpc-cert"); err == nil && v != "" {
+		grpcOpts.TLS.CertPath = v
+	}
+	if v, err := cmd.Flags().GetString("grpc-key"); err == nil && v != "" {
+		grpcOpts.TLS.KeyPath = v
+	}
+
+	// Pod resolution
+	if v, err := cmd.Flags().GetBool("grpc-pod-resolve"); err == nil && v {
+		grpcOpts.PodResolve = true
+	}
+	if v, err := cmd.Flags().GetString("grpc-namespace"); err == nil && v != "" {
+		grpcOpts.Namespace = v
+	}
+	if v, err := cmd.Flags().GetString("grpc-selector"); err == nil && v != "" {
+		grpcOpts.Selector = v
+	}
+
+	// Resilience tuning
+	if v, err := cmd.Flags().GetInt("grpc-buffer-capacity"); err == nil && v > 0 {
+		grpcOpts.BufferCapacity = v
+	}
+	if v, err := cmd.Flags().GetDuration("grpc-backoff-max"); err == nil && v > 0 {
+		grpcOpts.BackoffMax = v
+	}
+	if v, err := cmd.Flags().GetDuration("grpc-heartbeat"); err == nil && v > 0 {
+		grpcOpts.HeartbeatInterval = v
+	}
+	if v, err := cmd.Flags().GetDuration("grpc-heartbeat-timeout"); err == nil && v > 0 {
+		grpcOpts.HeartbeatTimeout = v
+	}
+
+	options.GRPCOptions = grpcOpts
 }
 
 // addSessionDiagnosisFlags registers the shared session-diagnosis flags on a
