@@ -1017,6 +1017,13 @@ func (p *NTRIPStreamParser) Match(
 		records = append(records, protocol.Record{Resp: respMsgs[i]})
 	}
 
+	if q, ok := reqStreams[0]; ok {
+		*q = (*q)[len(reqMsgs):]
+	}
+	if q, ok := respStreams[0]; ok {
+		*q = (*q)[len(respMsgs):]
+	}
+
 	return records
 }
 

@@ -12,6 +12,7 @@ import (
 	"kyanos/monitor"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -478,9 +479,15 @@ func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernE
 		} else {
 			isNTRIP := false
 			if data[0] == '$' {
-				isNTRIP = true
+				s := string(data)
+				if strings.Contains(s, "GGA") || strings.Contains(s, "GNS") {
+					isNTRIP = true
+				}
 			} else if data[0] == 0xD3 && len(data) >= 3 && (data[1]&0xFC) == 0x00 {
-				isNTRIP = true
+				payloadLen := (uint16(data[1])&0x03)<<8 | uint16(data[2])
+				if payloadLen < 1024 {
+					isNTRIP = true
+				}
 			} else {
 				for _, prefix := range []string{"ICY ", "SOURCETABLE ", "SOURCE ", "Ntrip-Version: "} {
 					if len(data) >= len(prefix) && string(data[:len(prefix)]) == prefix {
@@ -682,7 +689,21 @@ func (c *Connection4) parseStreamBuffer(streamBuffer *buffer.StreamBuffer, messa
 				if common.ConntrackLog.Level >= logrus.DebugLevel {
 					common.ConntrackLog.Debugf("[parseStreamBuffer] Update %s role", c.ToString())
 				}
-				c.resetParseProgress()
+				if c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP {
+					// For NTRIP, we must not drop the first parsed message (GGA or RTCM)
+					// otherwise the session fails to track client location or start successfully.
+					for _, pm := range parseResult.ParsedMessages {
+						streamId := pm.StreamId()
+						if resultQueue[streamId] == nil {
+							queue := protocol.ParsedMessageQueue(make([]protocol.ParsedMessage, 0))
+							resultQueue[streamId] = &queue
+						}
+						*resultQueue[streamId] = append(*resultQueue[streamId], pm)
+					}
+					streamBuffer.RemovePrefix(parseResult.ReadBytes)
+				} else {
+					c.resetParseProgress()
+				}
 			} else {
 				if len(parseResult.ParsedMessages) > 0 && parseResult.ParsedMessages[0].IsReq() != (messageType == protocol.Request) {
 					streamBuffer.RemovePrefix(parseResult.ReadBytes)

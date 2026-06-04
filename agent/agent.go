@@ -446,6 +446,12 @@ func SetupAgent(options ac.AgentOptions) {
 		watch.RunWatchRender(ctx, recordsChannel, options.WatchOptions)
 	}
 
+	if sessionTracker != nil {
+		sessionTracker.CloseAll(time.Now())
+		// Ensure that the log output triggered by CloseAll (diagnostic reports) is flushed
+		time.Sleep(200 * time.Millisecond)
+	}
+
 	// Emit a multi-Pod load summary at shutdown (S6), if enabled.
 	if podLoadAnalyzer != nil {
 		common.SetLogToStdout()

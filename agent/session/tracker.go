@@ -161,25 +161,36 @@ func (c *ConnInfo) ServerIP() string {
 // OnRecord processes a single protocol record, routing it to the appropriate
 // NTRIP session based on message type and connection info.
 func (t *SessionTracker) OnRecord(record protocol.Record, conn *ConnInfo) {
-	if record.Request() == nil {
-		return
-	}
-
 	req := record.Request()
 	resp := record.Response()
 
-	switch msg := req.(type) {
-	case *ntrip.NTRIPRequest:
-		t.handleNTRIPRequest(msg, resp, conn, record)
+	if req == nil && resp == nil {
+		return
+	}
 
-	case *ntrip.NTRIPNMEASentence:
-		t.handleNMEASentence(msg, conn)
+	// 1. If Request is present, process it
+	if req != nil {
+		switch msg := req.(type) {
+		case *ntrip.NTRIPRequest:
+			t.handleNTRIPRequest(msg, resp, conn, record)
+			return // handleNTRIPRequest internally handles resp if present
+		case *ntrip.NTRIPNMEASentence:
+			t.handleNMEASentence(msg, conn)
+		case *ntrip.NTRIPRTCMFrame:
+			t.handleRTCMFrame(msg.Inner, conn)
+		case *rtcm.RTCMFrame:
+			t.handleRTCMFrame(msg, conn)
+		}
+	}
 
-	case *ntrip.NTRIPRTCMFrame:
-		t.handleRTCMFrame(msg.Inner, conn)
-
-	case *rtcm.RTCMFrame:
-		t.handleRTCMFrame(msg, conn)
+	// 2. If Request is nil but Response is present (e.g. unmatched RTCM frame)
+	if req == nil && resp != nil {
+		switch msg := resp.(type) {
+		case *ntrip.NTRIPRTCMFrame:
+			t.handleRTCMFrame(msg.Inner, conn)
+		case *rtcm.RTCMFrame:
+			t.handleRTCMFrame(msg, conn)
+		}
 	}
 }
 
@@ -417,6 +428,13 @@ func (t *SessionTracker) handleNMEASentence(nmea *ntrip.NTRIPNMEASentence, conn 
 		s = t.getOrCreateSession(clientIP, clientPort, "_unknown_", "", conn.ServerIP(), ts)
 	}
 
+	s.mu.Lock()
+	if s.ClientRole == "" || s.ClientRole == "Unknown" {
+		s.ClientRole = "Rover"
+		s.ServerRole = "Caster"
+	}
+	s.mu.Unlock()
+
 	ggaEvent := s.AddGGAEvent(ts, nmea.Latitude, nmea.Longitude,
 		nmea.FixQuality, nmea.NumSatellites, nmea.HDOP,
 		nmea.DiffAge, nmea.DiffStationID, nmea.UTCTime)
@@ -435,6 +453,13 @@ func (t *SessionTracker) handleRTCMFrame(frame *rtcm.RTCMFrame, conn *ConnInfo) 
 		// RTCM without a known session (e.g., direct RTCM stream)
 		s = t.getOrCreateSession(clientIP, clientPort, "direct-rtcm", "", conn.ServerIP(), ts)
 	}
+
+	s.mu.Lock()
+	if s.ClientRole == "" || s.ClientRole == "Unknown" {
+		s.ClientRole = "Rover"
+		s.ServerRole = "Caster"
+	}
+	s.mu.Unlock()
 
 	// Extract epoch time from RTCM payload for latency tracking
 	var epochTime time.Time
@@ -743,4 +768,27 @@ func (t *SessionTracker) FindActiveSession(clientIP string, clientPort uint16) (
 	}
 	return nil, false
 }
+
+// CloseAll closes all active sessions and triggers final stats computation and notifications.
+func (t *SessionTracker) CloseAll(closeTime time.Time) {
+	t.mu.Lock()
+	var active []*NTRIPSession
+	for _, s := range t.sessions {
+		if s.IsActive() {
+			active = append(active, s)
+		}
+	}
+	t.mu.Unlock()
+
+	for _, s := range active {
+		s.mu.Lock()
+		s.CloseDirection = CloseClient
+		s.mu.Unlock()
+
+		s.Close(closeTime)
+		t.notifyClosed(s)
+		t.notifyEventClose(s)
+	}
+}
+
 
