@@ -749,7 +749,18 @@ func (c *Connection4) checkProgress(sb *buffer.StreamBuffer) bool {
 
 func isReq(conn *Connection4, event *bpf.AgentKernEvt) (bool, bool) {
 	if conn.Role == bpf.AgentEndpointRoleTKRoleUnknown {
-		return false, false
+		// When the connection role is unknown (e.g. fentry/fexit for accept/connect
+		// failed on WSL2 kprobe fallback), use the syscall source function to infer
+		// direction: write/send syscalls produce outgoing data, read/recv produce
+		// incoming data. Combined with content-based role detection in
+		// inferRoleFromContent, this enables protocol parsing even without fentry.
+		srcFunc := bpf.AgentSourceFunctionT(event.FuncName[0])
+		if isSendFunction(srcFunc) {
+			// This process is sending data → it's the request from this process's perspective
+			return true, true
+		}
+		// This process is reading data → it's the response from this process's perspective
+		return false, true
 	}
 	var isReq bool
 	if !conn.IsServerSide() {
@@ -758,6 +769,25 @@ func isReq(conn *Connection4, event *bpf.AgentKernEvt) (bool, bool) {
 		isReq = event.Step >= bpf.AgentStepTNIC_IN
 	}
 	return isReq, true
+}
+
+// isSendFunction returns true if the source function represents data being
+// sent/written by the process (outgoing direction).
+func isSendFunction(f bpf.AgentSourceFunctionT) bool {
+	switch f {
+	case bpf.AgentSourceFunctionTKSyscallWrite,
+		bpf.AgentSourceFunctionTKSyscallSend,
+		bpf.AgentSourceFunctionTKSyscallSendTo,
+		bpf.AgentSourceFunctionTKSyscallSendMsg,
+		bpf.AgentSourceFunctionTKSyscallSendMMsg,
+		bpf.AgentSourceFunctionTKSyscallWriteV,
+		bpf.AgentSourceFunctionTKSyscallSendfile,
+		bpf.AgentSourceFunctionTKGoTLSConnWrite,
+		bpf.AgentSourceFunctionTKSSLWrite:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Connection4) IsServerSide() bool {
