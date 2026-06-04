@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listSessions } from '../api'
+import { useWebSocket } from '../composables/useWebSocket'
 
 const sessions = ref([])
 const loading = ref(false)
@@ -53,6 +54,37 @@ const loadSessions = async () => {
 const goDetail = (id) => {
   router.push(`/sessions/${id}`)
 }
+
+// WebSocket for real-time session list updates
+const wsUrl = () => {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/api/v1/ws/sessions`
+}
+
+useWebSocket(wsUrl, {
+  onMessage(msg) {
+    if (!msg.data) return
+    const session = msg.data
+
+    if (msg.type === 'session_list_closed') {
+      // Update existing session status
+      const idx = sessions.value.findIndex(s => s.session_id === session.session_id)
+      if (idx !== -1) {
+        sessions.value[idx] = { ...sessions.value[idx], ...session, closed: true }
+      }
+    } else if (msg.type === 'session_list_updated') {
+      const idx = sessions.value.findIndex(s => s.session_id === session.session_id)
+      if (idx !== -1) {
+        sessions.value[idx] = { ...sessions.value[idx], ...session }
+      } else {
+        // New session we haven't seen before
+        sessions.value.unshift(session)
+      }
+    }
+  },
+  autoReconnect: true,
+  reconnectInterval: 5000,
+})
 
 onMounted(loadSessions)
 </script>

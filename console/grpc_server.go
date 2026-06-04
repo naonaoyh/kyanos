@@ -134,8 +134,14 @@ func (h *AgentServiceHandler) ReportEvents(stream agentpb.AgentService_ReportEve
 		if rec != nil {
 			h.store.RecordEvent(rec)
 
-			// Broadcast to WebSocket subscribers.
+			// Broadcast to per-session WebSocket subscribers.
 			h.hub.BroadcastSessionEvent(evt.SessionId, rec)
+
+			// Broadcast to global "sessions" topic so SessionExplorer
+			// can update in real time.
+			if sessRec := h.store.GetSession(evt.SessionId); sessRec != nil {
+				h.hub.BroadcastSessionListChange("updated", sessRec)
+			}
 		}
 
 		// If this is a close event with a summary, persist the session.
@@ -153,6 +159,7 @@ func (h *AgentServiceHandler) ReportEvents(stream agentpb.AgentService_ReportEve
 				if sessionRec != nil {
 					h.store.SaveSession(sessionRec)
 					h.hub.BroadcastSessionUpdate(evt.SessionId, sessionRec)
+					h.hub.BroadcastSessionListChange("closed", sessionRec)
 
 					// Update task session count.
 					if t := h.store.GetTask(evt.TaskId); t != nil {

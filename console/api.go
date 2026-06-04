@@ -74,6 +74,7 @@ func (h *APIHandler) registerRoutes() {
 	h.mux.HandleFunc("GET /api/v1/topology", h.getTopology)
 
 	// WebSocket upgrade.
+	h.mux.HandleFunc("GET /api/v1/ws/sessions", h.wsSessions)
 	h.mux.HandleFunc("GET /api/v1/ws/sessions/{id}", h.wsSession)
 	h.mux.HandleFunc("GET /api/v1/ws/tasks/{id}", h.wsTask)
 
@@ -343,6 +344,10 @@ func (h *APIHandler) getTopology(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- WebSocket handlers ---
+
+func (h *APIHandler) wsSessions(w http.ResponseWriter, r *http.Request) {
+	h.handleWSUpgrade(w, r, "sessions")
+}
 
 func (h *APIHandler) wsSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

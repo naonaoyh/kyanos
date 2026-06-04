@@ -1,15 +1,28 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { getHealth } from './api'
 
 const health = ref(null)
+let healthTimer = null
 
-onMounted(async () => {
+const fetchHealth = async () => {
   try {
     const { data } = await getHealth()
     health.value = data
   } catch {
     // Backend not available during dev — ignore.
+  }
+}
+
+onMounted(() => {
+  fetchHealth()
+  healthTimer = setInterval(fetchHealth, 10000)
+})
+
+onUnmounted(() => {
+  if (healthTimer) {
+    clearInterval(healthTimer)
+    healthTimer = null
   }
 })
 </script>

@@ -161,6 +161,18 @@ func (h *WSHub) BroadcastTaskStatus(taskID string, t *Task) {
 	})
 }
 
+// BroadcastSessionListChange pushes a session lifecycle event to all
+// subscribers of the global "sessions" topic. changeType should be
+// "created", "updated", or "closed".
+func (h *WSHub) BroadcastSessionListChange(changeType string, rec *SessionRecord) {
+	h.Broadcast("sessions", &WSMessage{
+		Type:      "session_list_" + changeType,
+		Topic:     "sessions",
+		Data:      rec,
+		Timestamp: time.Now(),
+	})
+}
+
 // SubscriberCount returns the number of subscribers for a topic.
 func (h *WSHub) SubscriberCount(topic string) int {
 	h.mu.RLock()
