@@ -88,6 +88,15 @@ type AgentOptions struct {
 	// PcapMaxDuration is the max pcap file duration before rotation (0 = unlimited).
 	PcapMaxDuration time.Duration
 
+	// COS upload configuration (Tencent Cloud Object Storage).
+	// When COSBucket is non-empty, rotated pcap files are automatically
+	// uploaded to COS. Requires TENCENTCLOUD_SECRET_ID/KEY env vars or
+	// explicit credentials.
+	COSBucket    string
+	COSRegion    string
+	COSPrefix    string
+	COSDeleteRaw bool // delete local file after successful upload
+
 	// GRPCServer is the Control Plane / Console address (host:port) supplied via
 	// the --grpc-server flag. An empty value (the default zero value) keeps the
 	// Agent in Standalone_CLI_Mode: no gRPC_Client is constructed and behaviour

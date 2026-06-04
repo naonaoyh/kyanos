@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"kyanos/agent/analysis"
 	anc "kyanos/agent/analysis/common"
 	ac "kyanos/agent/common"
@@ -24,6 +23,7 @@ import (
 	"kyanos/common"
 	"kyanos/proto/agentpb"
 	"kyanos/version"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -152,6 +152,21 @@ func SetupAgent(options ac.AgentOptions) {
 
 	// Standalone PCAP-NG export (--pcap-output). Independent of --diag and gRPC.
 	var standalonePcapWriter *export.PcapNgWriter
+	var cosUploader *export.COSUploader
+	if options.COSBucket != "" {
+		uploader, err := export.NewCOSUploader(export.COSUploaderConfig{
+			Bucket:    options.COSBucket,
+			Region:    options.COSRegion,
+			Prefix:    options.COSPrefix,
+			DeleteRaw: options.COSDeleteRaw,
+		})
+		if err != nil {
+			common.AgentLog.Errorf("failed to create COS uploader: %v", err)
+		} else {
+			cosUploader = uploader
+			common.AgentLog.Infof("COS upload enabled: bucket=%s region=%s", options.COSBucket, options.COSRegion)
+		}
+	}
 	if options.PcapOutputPath != "" {
 		rotator, err := export.NewRotateWriter(export.RotateWriterConfig{
 			BasePath:    options.PcapOutputPath,
@@ -159,6 +174,17 @@ func SetupAgent(options ac.AgentOptions) {
 			MaxDuration: options.PcapMaxDuration,
 			HeaderGenerator: func() []byte {
 				return export.GetGlobalHeaderBytes(nil)
+			},
+			OnRotate: func(closedPath string) {
+				if cosUploader != nil {
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+						defer cancel()
+						if _, err := cosUploader.Upload(ctx, closedPath); err != nil {
+							common.AgentLog.Errorf("COS upload failed for %q: %v", closedPath, err)
+						}
+					}()
+				}
 			},
 		})
 		if err != nil {

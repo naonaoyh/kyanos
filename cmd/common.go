@@ -204,6 +204,18 @@ func applyPcapOptions(cmd *cobra.Command) {
 	if dur, err := cmd.Flags().GetDuration("pcap-max-duration"); err == nil {
 		options.PcapMaxDuration = dur
 	}
+	if bucket, err := cmd.Flags().GetString("cos-bucket"); err == nil && bucket != "" {
+		options.COSBucket = bucket
+	}
+	if region, err := cmd.Flags().GetString("cos-region"); err == nil && region != "" {
+		options.COSRegion = region
+	}
+	if prefix, err := cmd.Flags().GetString("cos-prefix"); err == nil {
+		options.COSPrefix = prefix
+	}
+	if del, err := cmd.Flags().GetBool("cos-delete-raw"); err == nil {
+		options.COSDeleteRaw = del
+	}
 }
 
 // initGRPCOptions reads the shared gRPC control-plane persistent flags
@@ -296,6 +308,14 @@ func addSessionDiagnosisFlags(cmd *cobra.Command) {
 		"Max pcap file size in bytes before rotation (default 100MB, 0=unlimited)")
 	cmd.Flags().Duration("pcap-max-duration", 1*time.Hour,
 		"Max pcap file duration before rotation (default 1h, 0=unlimited)")
+	cmd.Flags().String("cos-bucket", "",
+		"Tencent Cloud COS bucket name for auto-uploading rotated pcap files")
+	cmd.Flags().String("cos-region", "ap-guangzhou",
+		"COS region (default ap-guangzhou)")
+	cmd.Flags().String("cos-prefix", "",
+		"COS object key prefix (e.g. 'captures/agent-01')")
+	cmd.Flags().Bool("cos-delete-raw", false,
+		"Delete local pcap file after successful COS upload")
 }
 
 func InitLog() {
