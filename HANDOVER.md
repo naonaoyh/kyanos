@@ -1,8 +1,8 @@
 # Kyanos GNSS 专项开发 — 交接文档
 
-> 最后更新: 2025-07-14 (Phase 7 完成 + WSL2 验证 + TKE 部署配置)  
-> 分支: `feat/gnss-ntrip-rtcm-support`  
-> 仓库: `https://github.com/naonaoyh/kyanos.git`  
+> 最后更新: 2026-06-05 (WSL2 验证 + Bug 修复 + TUI 诊断 + PCAP/COS + WebSocket 实时推送)
+> 分支: `feat/gnss-ntrip-rtcm-support`
+> 仓库: `https://github.com/naonaoyh/kyanos.git`
 > 上游: `https://github.com/hengyoush/kyanos` (原始 Kyanos 项目)
 
 ---
@@ -17,7 +17,10 @@
 - RTCM 3.2 二进制帧解析与连续性分析
 - 会话级诊断引擎（登录、GGA、RTCM、网络质量、连接稳定性）
 - TCP 重传/拥塞与 RTCM 延迟关联分析
-- 未来规划：PCAP 导出、Web Console、K8s 部署
+- PCAP-NG 合成导出（Wireshark 兼容）+ 腾讯云 COS 自动上传
+- Web Console（gRPC + REST + WebSocket 实时推送 + Vue 3 前端）
+- TUI 诊断面板（Bubble Tea 集成）
+- K8s 部署方案（Helm Chart + DaemonSet）
 
 ### 1.2 技术栈
 
@@ -54,7 +57,7 @@
 | 3 | GNSS 综合视图与统计增强 | **已完成** (已提交 bc0c174) |
 | 4 | 工程化与生产就绪 | **已完成** (已提交 bc0c174) |
 | 5 | NTRIP 诊断引擎 | **基本完成** (T0-T5+渲染已提交 ac44a76; 详见 ROADMAP_NEXT) |
-| 6 | PCAP 导出与对象存储 | **部分** (JSONL 结构化导出已完成; PCAP/COS/轮转未开始) |
+| 6 | PCAP 导出与对象存储 | **已完成** (PCAP-NG 合成导出 + RotateWriter 轮转 + COS 自动上传) |
 | 7 | gRPC 通信层与 Agent 改造 | **已完成** (必需任务全部完成; 可选PBT测试未做; cilium/ebpf升级v0.17.1) |
 | 8 | Web Console 后端 | **已完成** (gRPC server, REST API, WebSocket, diagnostics) |
 | 9 | Web Console 前端 | **已完成** (Vue 3 + Vite + Element Plus) |
@@ -627,3 +630,86 @@ GOOS=linux go test -c ./agent/controlplane/    # ✅ compiles
 - **单向记录判定修复**：修改了 `protocol.go` 中的 `IsUnidirectional()` 为 `r.Req == nil || r.Resp == nil`，确保只有一侧的 RTCM (Req=nil) 或 GGA (Resp=nil) 可以被正确判定为单向包。
 - **绕过排序缓存直发**：在 `RecordsProcessor.Run` 消费逻辑中，若记录被判定为单向，**直接调用 `submitRecord` 派发输出，彻底绕过 1000ms 缓存与排序队列**。这在保障 RTCM 推送实时性的同时，完全消除了高吞吐量数据流下的 CPU 排序消耗与内存积压。
 - **实测结果**：运行 `./test_ntrip_capture.sh` 集成测试，NTRIP 捕获指标正常，且单向 RTCM 和 GGA 的打印相较于 HTTP 握手记录提前了整整 1 秒，完美展现了直发优化成果。
+
+---
+
+## 18. WSL2 端到端验证、Bug 修复与功能增强 (2026-06-05)
+
+### 18.1 WSL2 端到端验证结果
+
+| 测试 | 结果 | 详情 |
+|------|------|------|
+| `test_ntrip_capture.sh` | **PASS** | NTRIP 请求+认证, GGA, RTCM 5帧, CRC 全 PASS |
+| `test_ntrip_diag.sh` | **PASS** | 诊断引擎完整输出, JSONL 2 sessions, Score 99/100 |
+| `test_ntrip_pcap_replay.sh` | **2/3 PASS** | Rover ✅, Source ✅, 无握手角色推断预期失败 |
+
+### 18.2 Bug 修复 (commit 294312f)
+
+1. **`%!d(MISSING)` 格式化错误** (`agent/metadata/process.go`): `stopPID` 函数缺少 `netns` 参数，修复为从缓存加载后打印。
+
+2. **NTRIP 会话 Auth 未记录**: loopback 上 kyanos 双向捕获导致请求和响应在不同 Connection4 上。修复涉及 4 个文件:
+   - `tracker.go`: 请求含认证信息时标记 `AuthChecked=true`
+   - `scoring.go`: 仅在 `HTTPStatusCode > 0` 时判定认证失败
+   - `types.go`: `AnalyzeDisconnect` 同理
+   - `report.go`: 区分"已观察但响应未捕获"与"认证失败"
+
+3. **`test_ntrip_diag.sh` 脚本修复**: 移除 `set -e`（与 `kill`/`wait` 不兼容），添加显式 5 点验证。
+
+### 18.3 TUI 诊断渲染 (commit ab3d079)
+
+新增 `agent/render/watch/diag_view.go`:
+- `DiagProvider` 接口 + `DiagSessionSnapshot` 类型
+- Lipgloss 样式的诊断表格和详情渲染
+
+`watch_render.go` 修改:
+- `d` 键切换诊断面板，`enter` 查看会话详情，`esc` 返回
+- `session_wiring.go` 添加 `sessionTrackerDiagAdapter`
+
+### 18.4 PCAP-NG 合成导出 (commit eb28bcb)
+
+新增 CLI flags: `--pcap-output`, `--pcap-max-size`, `--pcap-max-duration`
+- 使用现有 `export.PcapNgWriter` + `RotateWriter` 基础设施
+- `agent.go` 中创建 standalone writer，修改 RecordFunc/OnCloseRecordFunc 回退逻辑
+- WSL2 验证: 2392 字节有效 pcapng 文件
+
+### 18.5 WebSocket 实时推送 (commit 50959da)
+
+- `websocket.go`: `BroadcastSessionListChange` 全局 "sessions" 主题
+- `api.go`: `GET /api/v1/ws/sessions` 端点
+- `grpc_server.go`: session 生命周期广播
+- `composables/useWebSocket.js`: 可复用 composable（自动重连）
+- `SessionExplorer.vue`: WebSocket 实时会话列表更新
+- `App.vue`: 10s 健康状态轮询
+
+### 18.6 COS 云存储上传 (commit eb49f37)
+
+新增 CLI flags: `--cos-bucket`, `--cos-region`, `--cos-prefix`, `--cos-delete-raw`
+- RotateWriter `OnRotate` 回调自动上传已轮转文件
+- Shutdown 时自动上传最终文件
+- 凭证从 `TENCENTCLOUD_SECRET_ID/KEY` 环境变量读取
+
+### 18.7 SessionDetail 实时增强 (commit af4a3a7)
+
+- 实时时长计时器（活跃会话每秒更新）
+- 连接状态指示器（Live / Disconnected）
+- RTCM 吞吐量（5 秒滑动窗口 RTCM/s）
+- EventTimeline 事件类型过滤（All/RTCM/GGA/Auth/Net/Close）
+- 新事件自动滚动到底部
+
+### 18.8 全前端视图实时增强 (commit 0d5cfff)
+
+- **Topology**: 10s 轮询 agent 状态 + "Updated" 时间戳
+- **Alerts**: 15s 轮询 + 新告警脉冲提示 + 摘要栏
+- **Report**: WebSocket 活跃会话自动刷新 + "Live — updating" 指示器
+
+### 18.9 提交清单
+
+| Commit | 内容 |
+|--------|------|
+| `294312f` | fix: auth tracking + format string bug |
+| `ab3d079` | feat(tui): diagnostic session view in watch TUI |
+| `eb28bcb` | feat(pcap): standalone PCAP-NG export |
+| `50959da` | feat(ws): real-time WebSocket push |
+| `eb49f37` | feat(cos): COS cloud storage auto-upload |
+| `af4a3a7` | feat(ui): SessionDetail real-time enhancements |
+| `0d5cfff` | feat(ui): Topology/Alerts/Report real-time updates |

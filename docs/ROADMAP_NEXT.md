@@ -598,17 +598,63 @@ T1b / T6 / T7 标记为 ⚠️LINUX，待环境恢复
 - 验证：`GOOS=linux go build ./...`（cgo stub）、`go vet`（session/agent/cmd）、
   `go test -c ./agent/session/` 全过；新文件 gofmt 干净。
 
-#### Phase 6 剩余（未做）
+#### Phase 6 剩余 ✅ 已完成 (2026-06-05)
 
-- PCAP 合成导出（需真实包数据才有意义，⚠️建议 Linux 环境验证）
-- 腾讯云 COS 上传（需 SDK + 凭据 + 网络）
-- 文件轮转（按大小/时间切割）
+- **PCAP 合成导出**: `agent/export/pcap.go` + `rotate.go` 基础设施已有，新增 CLI 接线
+  - `--pcap-output <path>`: standalone PCAP-NG 写入（不依赖 gRPC）
+  - `--pcap-max-size` / `--pcap-max-duration`: RotateWriter 轮转
+  - `agent.go` 中 RecordFunc/OnCloseRecordFunc 回退到 standalone writer
+- **COS 上传**: `--cos-bucket/region/prefix/delete-raw` flags，RotateWriter OnRotate 回调自动上传
+- **WSL2 验证**: 2392 字节有效 pcapng 文件，file 命令确认格式正确
 
 完整用法：
 ```bash
 sudo kyanos watch ntrip --diag --diag-jsonl sessions.jsonl
 sudo kyanos watch ntrip --diag --diag-report --diag-jsonl out.jsonl --pod-load
 ```
+
+### Bug Fix — Auth Tracking + Format String ✅ 已完成 (2026-06-05)
+
+- `agent/metadata/process.go`: `stopPID` 格式化字符串缺少 `netns` 参数，修复为从缓存加载
+- `agent/session/tracker.go`: 请求含认证信息时标记 `AuthChecked=true`（解决 loopback 双向捕获导致 Auth 丢失）
+- `agent/session/scoring.go` + `types.go`: 仅在 `HTTPStatusCode > 0` 时判定认证失败扣分
+- `agent/session/report.go`: 区分"已观察但响应未捕获"与"认证失败"
+- `test_ntrip_diag.sh`: 移除 `set -e`，添加 5 点显式验证
+- WSL2 验证: 诊断测试 ALL PASS，auth_checked=true，score 99/100
+
+### TUI Diagnostic Rendering ✅ 已完成 (2026-06-05)
+
+- `agent/render/watch/diag_view.go`（新建）: DiagProvider 接口、DiagSessionSnapshot、Lipgloss 样式表格/详情渲染
+- `agent/render/watch/watch_render.go`: model 添加 diagMode/diagTable/diagViewport，`d` 键切换，enter 查看详情
+- `agent/render/watch/option.go`: DiagTracker 字段
+- `agent/session/types.go`: GGAEventCount() 访问器
+- `agent/session_wiring.go`: sessionTrackerDiagAdapter
+- `agent/agent.go`: --diag 启用时注入 tracker 到 TUI options
+
+### Standalone PCAP-NG Export ✅ 已完成 (2026-06-05)
+
+- `agent/common/options.go`: PcapOutputPath/PcapMaxSize/PcapMaxDuration + COS 字段
+- `cmd/common.go`: --pcap-output/--pcap-max-size/--pcap-max-duration/--cos-bucket/region/prefix/delete-raw
+- `cmd/ntrip.go` / `cmd/rtcm.go`: 调用 applyPcapOptions
+- `agent/agent.go`: 创建 standalone RotateWriter + PcapNgWriter + COS OnRotate 回调
+- WSL2 验证: 2392 字节有效 pcapng 文件
+
+### WebSocket Real-time Push ✅ 已完成 (2026-06-05)
+
+- `console/websocket.go`: BroadcastSessionListChange 全局 "sessions" 主题
+- `console/api.go`: GET /api/v1/ws/sessions 端点
+- `console/grpc_server.go`: session 生命周期广播
+- `console/frontend/src/composables/useWebSocket.js`（新建）: 可复用 composable
+- `SessionExplorer.vue`: WebSocket 实时会话列表
+- `App.vue`: 10s 健康状态轮询
+
+### SessionDetail + All Views Real-time Enhancement ✅ 已完成 (2026-06-05)
+
+- `SessionDetail.vue`: 实时时长计时器、连接状态指示器、RTCM 吞吐量、事件过滤
+- `EventTimeline.vue`: 事件类型过滤按钮 + 自动滚动
+- `Topology.vue`: 10s 轮询 + "Updated" 时间戳
+- `Alerts.vue`: 15s 轮询 + 新告警脉冲提示 + 摘要栏
+- `Report.vue`: WebSocket 活跃会话自动刷新 + "Live — updating" 指示器
 
 
 ---
@@ -756,6 +802,6 @@ npm run build  # 生产构建 → dist/
 
 ### 13.4 已知限制
 
-1. **WebSocket 前端集成**: 前端尚未实现原生 WebSocket 客户端连接（当前为轮询模式）；后续可用 `useWebSocket` composable
+1. **WebSocket 前端集成**: ✅ 已完成。`composables/useWebSocket.js` 提供可复用 composable；SessionExplorer、SessionDetail、Report 均已接入 WebSocket 实时更新。
 2. **虚拟滚动**: Session 列表和 Timeline 未实现虚拟滚动（Element Plus `el-table-v2` 可后续集成）
 3. **国际化**: 当前全英文 UI，后续可加 i18n
