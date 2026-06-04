@@ -23,7 +23,6 @@ func LoadGoTlsUprobe() error {
 	collectionOptions := &ebpf.CollectionOptions{
 		Programs: ebpf.ProgramOptions{
 			// LogLevel: ebpf.LogLevelInstruction,
-			LogSize:     10 * 1024,
 			KernelTypes: ac.CollectionOpts.Programs.KernelTypes,
 		},
 		MapReplacements: getMapReplacementsForGoTls(),
