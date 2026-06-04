@@ -413,3 +413,134 @@ func TestAPISessionReportUnsupportedFormat(t *testing.T) {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
+
+func TestAPIUpdateTaskFilter(t *testing.T) {
+	store := NewMemoryStore()
+	hub := NewWSHub()
+	reporter := NewDiagnosticReporter()
+	handler := NewAgentServiceHandler(store, hub)
+	api := NewAPIHandler(store, handler, hub, reporter)
+
+	// Create running task.
+	taskID := "task-running"
+	task := &Task{
+		ID:        taskID,
+		Status:    TaskStatusRunning,
+		CreatedAt: time.Now(),
+	}
+	store.SaveTask(task)
+
+	// Update filter.
+	body := `{"mountpoints":["MOUNT-NEW"],"usernames":["user-new"],"message_types":[1005]}`
+	req := httptest.NewRequest("POST", "/api/v1/tasks/"+taskID+"/filter", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var updatedTask Task
+	json.Unmarshal(w.Body.Bytes(), &updatedTask)
+	assert := func(cond bool, msg string) {
+		if !cond {
+			t.Error(msg)
+		}
+	}
+	assert(updatedTask.NtripFilter != nil, "NtripFilter should not be nil")
+	assert(updatedTask.NtripFilter.Mountpoints[0] == "MOUNT-NEW", "Mountpoint mismatch")
+
+	// Try updating non-existent task.
+	req = httptest.NewRequest("POST", "/api/v1/tasks/nonexistent/filter", strings.NewReader(body))
+	w = httptest.NewRecorder()
+	api.ServeHTTP(w, req)
+	assert(w.Code == http.StatusNotFound, "should be 404 for nonexistent task")
+
+	// Try updating stopped task.
+	taskStopped := "task-stopped"
+	store.SaveTask(&Task{ID: taskStopped, Status: TaskStatusStopped})
+	req = httptest.NewRequest("POST", "/api/v1/tasks/"+taskStopped+"/filter", strings.NewReader(body))
+	w = httptest.NewRecorder()
+	api.ServeHTTP(w, req)
+	assert(w.Code == http.StatusBadRequest, "should be 400 for non-running task")
+}
+
+func TestAPIStorageStatusAndCleanup(t *testing.T) {
+	store := NewMemoryStore()
+	hub := NewWSHub()
+	reporter := NewDiagnosticReporter()
+	handler := NewAgentServiceHandler(store, hub)
+	api := NewAPIHandler(store, handler, hub, reporter)
+
+	// Check status
+	req := httptest.NewRequest("GET", "/api/v1/storage/status", nil)
+	w := httptest.NewRecorder()
+	api.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+
+	var status map[string]any
+	json.Unmarshal(w.Body.Bytes(), &status)
+	if status["type"] != "memory" {
+		t.Errorf("type = %v, want memory", status["type"])
+	}
+
+	// Trigger cleanup (MemoryStore does not implement CleanupExpired, should fail or Bad Request)
+	req = httptest.NewRequest("POST", "/api/v1/storage/cleanup?days=5", nil)
+	w = httptest.NewRecorder()
+	api.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("cleanup status = %d, want 400 for memory store", w.Code)
+	}
+}
+
+func TestAPIAnalytics(t *testing.T) {
+	store := NewMemoryStore()
+	hub := NewWSHub()
+	reporter := NewDiagnosticReporter()
+	handler := NewAgentServiceHandler(store, hub)
+	api := NewAPIHandler(store, handler, hub, reporter)
+
+	// Add sessions with different scores
+	store.SaveSession(&SessionRecord{
+		SessionID: "s1", Closed: true, Score: 95, StartTime: time.Now(),
+	})
+	store.SaveSession(&SessionRecord{
+		SessionID: "s2", Closed: true, Score: 75, StartTime: time.Now(),
+		Issues: []SessionIssue{{Category: "RTCM", Severity: "warn", Description: "lost frames"}},
+	})
+	store.SaveSession(&SessionRecord{
+		SessionID: "s3", Closed: true, Score: 30, StartTime: time.Now(),
+		Issues: []SessionIssue{{Category: "NETWORK", Severity: "error", Description: "high rtt"}},
+	})
+
+	req := httptest.NewRequest("GET", "/api/v1/analytics", nil)
+	w := httptest.NewRecorder()
+	api.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var summary AnalyticsSummary
+	json.Unmarshal(w.Body.Bytes(), &summary)
+
+	assert := func(cond bool, msg string) {
+		if !cond {
+			t.Error(msg)
+		}
+	}
+
+	assert(summary.TotalSessions == 3, "total sessions mismatch")
+	assert(summary.AverageScore == (95.0+75.0+30.0)/3.0, "average score mismatch")
+	assert(summary.ScoreDistribution["healthy"] == 1, "healthy count mismatch")
+	assert(summary.ScoreDistribution["degraded"] == 1, "degraded count mismatch")
+	assert(summary.ScoreDistribution["critical"] == 1, "critical count mismatch")
+	assert(len(summary.TopIssues) == 2, "top issues count mismatch")
+	assert(len(summary.WorstSessions) == 3, "worst sessions count mismatch")
+	assert(summary.WorstSessions[0].SessionID == "s3", "worst session should be s3 first")
+}

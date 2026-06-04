@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"kyanos/agent/analysis"
 	anc "kyanos/agent/analysis/common"
 	ac "kyanos/agent/common"
@@ -11,6 +12,8 @@ import (
 	"kyanos/agent/conn"
 	"kyanos/agent/controlplane"
 	"kyanos/agent/protocol"
+	"kyanos/agent/protocol/ntrip"
+	"kyanos/agent/protocol/rtcm"
 	loader_render "kyanos/agent/render/loader"
 	"kyanos/agent/render/stat"
 	"kyanos/agent/render/watch"
@@ -96,6 +99,8 @@ func SetupAgent(options ac.AgentOptions) {
 	var sessionTracker *session.SessionTracker
 	var podLoadAnalyzer *session.PodLoadAnalyzer
 	var jsonlExporter *session.JSONLExporter
+	var taskMgr *controlplane.TaskManager
+
 	if options.SessionDiagnosisEnable {
 		sessionTracker = session.NewSessionTracker(options.SessionTrackerConfig)
 		correlator := session.NewSessionCorrelator(options.SessionTrackerConfig.Correlator)
@@ -139,12 +144,78 @@ func SetupAgent(options ac.AgentOptions) {
 	}
 
 	conn.RecordFunc = func(r protocol.Record, c *conn.Connection4) error {
+		var activeSession *session.NTRIPSession
 		if sessionTracker != nil {
+			clientIP := c.RemoteIp.String()
+			clientPort := uint16(c.RemotePort)
+			if !c.IsServerSide() {
+				clientIP = c.LocalIp.String()
+				clientPort = uint16(c.LocalPort)
+			}
+			activeSession, _ = sessionTracker.FindActiveSession(clientIP, clientPort)
 			sessionTracker.OnRecord(r, connInfoFromConnection4(c))
 		}
+
+		if activeSession != nil && taskMgr != nil {
+			if pcapExp, taskID, ok := taskMgr.GetPcapNgExpForConn(activeSession); ok && pcapExp != nil {
+				payload, isReq, tsNs := extractRawPayloadFromRecord(r)
+				if len(payload) > 0 {
+					comment := generatePacketComment(activeSession, r, taskID)
+					clientIPNet := net.ParseIP(activeSession.ClientIP)
+					serverIPNet := net.ParseIP(activeSession.ServerIP)
+					var serverPort uint16
+					if c.IsServerSide() {
+						serverPort = uint16(c.LocalPort)
+					} else {
+						serverPort = uint16(c.RemotePort)
+					}
+
+					var src, dst net.IP
+					var sPort, dPort uint16
+					if isReq {
+						src, dst = clientIPNet, serverIPNet
+						sPort, dPort = activeSession.ClientPort, serverPort
+					} else {
+						src, dst = serverIPNet, clientIPNet
+						sPort, dPort = serverPort, activeSession.ClientPort
+					}
+
+					ts := time.Unix(0, int64(tsNs))
+					_ = pcapExp.WritePacket(ts, src, dst, sPort, dPort, payload, isReq, comment)
+				}
+			}
+		}
+
 		return statRecorder.ReceiveRecord(r, c, recordsChannel)
 	}
 	conn.OnCloseRecordFunc = func(c *conn.Connection4) error {
+		var activeSession *session.NTRIPSession
+		if sessionTracker != nil {
+			clientIP := c.RemoteIp.String()
+			clientPort := uint16(c.RemotePort)
+			if !c.IsServerSide() {
+				clientIP = c.LocalIp.String()
+				clientPort = uint16(c.LocalPort)
+			}
+			activeSession, _ = sessionTracker.FindActiveSession(clientIP, clientPort)
+		}
+
+		if activeSession != nil && taskMgr != nil {
+			if pcapExp, _, ok := taskMgr.GetPcapNgExpForConn(activeSession); ok && pcapExp != nil {
+				clientIPNet := net.ParseIP(activeSession.ClientIP)
+				serverIPNet := net.ParseIP(activeSession.ServerIP)
+				var serverPort uint16
+				if c.IsServerSide() {
+					serverPort = uint16(c.LocalPort)
+				} else {
+					serverPort = uint16(c.RemotePort)
+				}
+				direction := inferCloseDirection(c)
+				isClientInitiated := direction == session.CloseClient
+				_ = pcapExp.WriteFIN(time.Now(), clientIPNet, serverIPNet, activeSession.ClientPort, serverPort, isClientInitiated)
+			}
+		}
+
 		if sessionTracker != nil {
 			sessionTracker.OnConnectionClose(connInfoFromConnection4(c), time.Now(), inferCloseDirection(c))
 		}
@@ -193,7 +264,10 @@ func SetupAgent(options ac.AgentOptions) {
 		}
 		eventBuffer := controlplane.NewEventBuffer[*agentpb.SessionEvent](bufferCap)
 
-		taskMgr := controlplane.NewTaskManager(controlplane.NewRealClock())
+		taskMgr = controlplane.NewTaskManager(controlplane.NewRealClock())
+		if podResolver != nil {
+			taskMgr.SetIPToNameFunc(podResolver.IPToPodNameMap)
+		}
 		filterCtl := controlplane.NewFilterController(controlplane.FilterControllerConfig{
 			Apply: func(f protocol.ProtocolFilter) {
 				// In the full integration this would hot-swap the active
@@ -444,4 +518,66 @@ func startGopsServer(opts ac.AgentOptions) {
 			common.AgentLog.Info("gops server started")
 		}
 	}
+}
+
+func extractRawPayloadFromRecord(r protocol.Record) ([]byte, bool, uint64) {
+	req := r.Request()
+	resp := r.Response()
+
+	if resp != nil {
+		if nr, ok := resp.(*ntrip.NTRIPResponse); ok {
+			raw := []byte(nr.StatusLine + "\r\n")
+			if nr.ContentType != "" {
+				raw = append(raw, []byte("Content-Type: "+nr.ContentType+"\r\n")...)
+			}
+			raw = append(raw, []byte("\r\n")...)
+			return raw, false, nr.TimestampNs()
+		}
+	}
+
+	switch msg := req.(type) {
+	case *ntrip.NTRIPRequest:
+		raw := []byte(fmt.Sprintf("%s %s HTTP/1.1\r\n", msg.Method, msg.Path))
+		if msg.UserAgent != "" {
+			raw = append(raw, []byte("User-Agent: "+msg.UserAgent+"\r\n")...)
+		}
+		if msg.ContentType != "" {
+			raw = append(raw, []byte("Content-Type: "+msg.ContentType+"\r\n")...)
+		}
+		raw = append(raw, []byte("\r\n")...)
+		return raw, true, msg.TimestampNs()
+
+	case *ntrip.NTRIPNMEASentence:
+		return []byte(msg.Raw), true, msg.TimestampNs()
+
+	case *ntrip.NTRIPRTCMFrame:
+		if msg.Inner != nil {
+			return msg.Inner.RawBytes, false, msg.TimestampNs() // RTCM is downstream (Server -> Client)
+		}
+
+	case *rtcm.RTCMFrame:
+		return msg.RawBytes, false, msg.TimestampNs() // RTCM is downstream (Server -> Client)
+	}
+
+	return nil, false, 0
+}
+
+func generatePacketComment(s *session.NTRIPSession, r protocol.Record, taskID string) string {
+	var category string
+	req := r.Request()
+
+	switch msg := req.(type) {
+	case *ntrip.NTRIPRequest:
+		category = fmt.Sprintf("Login Request (User: %s)", msg.Username)
+	case *ntrip.NTRIPNMEASentence:
+		category = fmt.Sprintf("GGA Position Upload (Fix: %d, Sats: %d)", msg.FixQuality, msg.NumSatellites)
+	case *ntrip.NTRIPRTCMFrame:
+		if msg.Inner != nil {
+			category = fmt.Sprintf("RTCM Frame MSG %d (Size: %d)", msg.Inner.MessageType, len(msg.Inner.RawBytes))
+		}
+	case *rtcm.RTCMFrame:
+		category = fmt.Sprintf("RTCM Frame MSG %d (Size: %d)", msg.MessageType, len(msg.RawBytes))
+	}
+
+	return fmt.Sprintf("Task: %s | Session: %s | %s", taskID, s.SessionID, category)
 }

@@ -7,11 +7,11 @@
 #
 # Then uses Kyanos to capture and verify all three phases.
 export PATH=/usr/local/go/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH
-PROJDIR=/home/naonaoyh/projects/kyanos
+PROJDIR=/mnt/e/Work/kyanos
 cd $PROJDIR
 
-CASTER_PORT=2101
-LOG=/tmp/kyanos_ntrip.log
+CASTER_PORT=25321
+LOG=./kyanos_ntrip.log
 CASTER_SCRIPT=/tmp/fake_caster.py
 
 # --- Step 1: Create a fake NTRIP caster ---
@@ -44,6 +44,8 @@ def make_rtcm_frame(msg_type, payload_body):
 
 def handle_client(conn, addr):
     print(f"[caster] connection from {addr}")
+    # Brief pause to let BPF establish connection tracking after accept()
+    time.sleep(0.3)
     data = conn.recv(4096)
     request = data.decode('latin-1')
     print(f"[caster] received request:\n{request[:200]}")
@@ -115,6 +117,9 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.connect(('127.0.0.1', port))
 print("[client] connected to caster")
 
+# Brief pause to let BPF establish connection tracking after accept()
+time.sleep(0.3)
+
 # Send NTRIP v1 GET request with Basic Auth
 auth = base64.b64encode(b'testuser:testpass').decode()
 request = (
@@ -131,6 +136,9 @@ print(f"[client] sent NTRIP request (user=testuser, mount=RTCM3_TEST)")
 time.sleep(0.5)
 resp = sock.recv(1024)
 print(f"[client] response: {resp.decode('latin-1').strip()}")
+
+# Brief pause before GGA
+time.sleep(0.3)
 
 # Send GGA position upload
 gga = "$GPGGA,120000.00,3123.4567,N,12145.6789,E,1,12,0.8,50.0,M,0.0,M,1.0,0000*6A\r\n"
@@ -165,13 +173,15 @@ echo ""
 
 # --- Step 3: Start fake caster ---
 echo "=== Starting fake NTRIP caster on port $CASTER_PORT ==="
-python3 $CASTER_SCRIPT $CASTER_PORT > /tmp/caster.log 2>&1 &
+python3 $CASTER_SCRIPT $CASTER_PORT > ./caster.log 2>&1 &
 CASTER_PID=$!
 sleep 1
 
 # --- Step 4: Start Kyanos to capture NTRIP traffic ---
 echo "=== Starting Kyanos watch ntrip (port $CASTER_PORT) ==="
-./kyanos watch ntrip --local-ports $CASTER_PORT --debug-output > $LOG 2>&1 &
+cp ./kyanos /tmp/kyanos
+chmod +x /tmp/kyanos
+/tmp/kyanos watch ntrip --local-ports $CASTER_PORT --debug-output > $LOG 2>&1 &
 KYANOS_PID=$!
 sleep 3
 
@@ -200,7 +210,7 @@ echo "=============================================="
 
 echo ""
 echo "--- Caster log ---"
-cat /tmp/caster.log
+cat ./caster.log
 
 echo ""
 echo "--- Kyanos NTRIP capture (full) ---"

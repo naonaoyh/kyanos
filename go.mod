@@ -40,6 +40,9 @@ require (
 )
 
 require (
+	github.com/clbanning/mxj v1.8.4 // indirect
+	github.com/mozillazg/go-httpheader v0.2.1 // indirect
+	github.com/tencentyun/cos-go-sdk-v5 v0.7.73 // indirect
 	golang.org/x/mod v0.23.0 // indirect
 	golang.org/x/tools v0.30.0 // indirect
 )

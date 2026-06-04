@@ -16,6 +16,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +60,7 @@ func (h *APIHandler) registerRoutes() {
 	h.mux.HandleFunc("GET /api/v1/tasks", h.listTasks)
 	h.mux.HandleFunc("GET /api/v1/tasks/{id}", h.getTask)
 	h.mux.HandleFunc("DELETE /api/v1/tasks/{id}", h.stopTask)
+	h.mux.HandleFunc("POST /api/v1/tasks/{id}/filter", h.updateTaskFilter)
 
 	// Session queries.
 	h.mux.HandleFunc("GET /api/v1/sessions", h.listSessions)
@@ -72,6 +76,11 @@ func (h *APIHandler) registerRoutes() {
 	// WebSocket upgrade.
 	h.mux.HandleFunc("GET /api/v1/ws/sessions/{id}", h.wsSession)
 	h.mux.HandleFunc("GET /api/v1/ws/tasks/{id}", h.wsTask)
+
+	// System & Analytics.
+	h.mux.HandleFunc("GET /api/v1/storage/status", h.getStorageStatus)
+	h.mux.HandleFunc("POST /api/v1/storage/cleanup", h.triggerStorageCleanup)
+	h.mux.HandleFunc("GET /api/v1/analytics", h.getAnalytics)
 
 	// Health check.
 	h.mux.HandleFunc("GET /api/v1/health", h.health)
@@ -269,12 +278,12 @@ func (h *APIHandler) getSessionReport(w http.ResponseWriter, r *http.Request) {
 
 	format := r.URL.Query().Get("format")
 	if format == "html" || format == "" {
-		html := h.reporter.FormatHTML(s)
+		html := h.reporter.FormatHTML(s, h.store)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(html))
 	} else if format == "json" {
-		writeJSON(w, http.StatusOK, h.reporter.FormatJSON(s))
+		writeJSON(w, http.StatusOK, h.reporter.FormatJSON(s, h.store))
 	} else {
 		writeError(w, http.StatusBadRequest, "unsupported format: "+format)
 	}
@@ -465,4 +474,234 @@ func (h *APIHandler) health(w http.ResponseWriter, r *http.Request) {
 		"active_sessions":  h.store.ActiveSessionCount(),
 		"ws_subscribers":   h.hub.TotalSubscriberCount(),
 	})
+}
+
+// --- Task Filter Update ---
+
+type updateTaskFilterRequest struct {
+	Mountpoints  []string `json:"mountpoints,omitempty"`
+	Usernames    []string `json:"usernames,omitempty"`
+	MessageTypes []int32  `json:"message_types,omitempty"`
+}
+
+func (h *APIHandler) updateTaskFilter(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	t := h.store.GetTask(id)
+	if t == nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if t.Status != TaskStatusRunning {
+		writeError(w, http.StatusBadRequest, "cannot update filter on a non-running task")
+		return
+	}
+
+	var req updateTaskFilterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+
+	t.NtripFilter = &NtripFilterView{
+		Mountpoints: req.Mountpoints,
+		Usernames:   req.Usernames,
+	}
+	t.RtcmFilter = &RtcmFilterView{
+		MessageTypes: req.MessageTypes,
+	}
+	h.store.SaveTask(t)
+
+	update := &agentpb.FilterUpdate{
+		TaskId: id,
+		NtripFilter: &agentpb.NTRIPFilterConfig{
+			Mountpoints: req.Mountpoints,
+			Usernames:   req.Usernames,
+		},
+		RtcmFilter: &agentpb.RTCMFilterConfig{
+			MessageTypes: req.MessageTypes,
+		},
+	}
+	h.grpc.SendFilterUpdate(update)
+
+	writeJSON(w, http.StatusOK, t)
+}
+
+// --- Storage Status & Manual Cleanup ---
+
+func (h *APIHandler) getStorageStatus(w http.ResponseWriter, r *http.Request) {
+	type storageStatus struct {
+		Type            string `json:"type"`
+		SessionsCount   int    `json:"sessions_count"`
+		EventsFileCount int    `json:"events_file_count"`
+		TotalSizeBytes  int64  `json:"total_size_bytes"`
+		StorageDir      string `json:"storage_dir,omitempty"`
+	}
+
+	status := storageStatus{
+		Type:          "memory",
+		SessionsCount: h.store.ActiveSessionCount(),
+	}
+
+	if fs, ok := h.store.(interface{ GetDir() string }); ok {
+		dir := fs.GetDir()
+		status.Type = "file"
+		status.StorageDir = dir
+
+		var totalSize int64
+		var sessCount, evtsCount int
+
+		_ = filepath.Walk(filepath.Join(dir, "sessions"), func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				sessCount++
+				totalSize += info.Size()
+			}
+			return nil
+		})
+
+		_ = filepath.Walk(filepath.Join(dir, "events"), func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() {
+				evtsCount++
+				totalSize += info.Size()
+			}
+			return nil
+		})
+
+		status.SessionsCount = sessCount
+		status.EventsFileCount = evtsCount
+		status.TotalSizeBytes = totalSize
+	} else if memStore, ok := h.store.(*MemoryStore); ok {
+		memStore.mu.RLock()
+		status.SessionsCount = len(memStore.sessions)
+		status.EventsFileCount = len(memStore.events)
+		memStore.mu.RUnlock()
+	}
+
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (h *APIHandler) triggerStorageCleanup(w http.ResponseWriter, r *http.Request) {
+	daysStr := r.URL.Query().Get("days")
+	days := 7
+	if daysStr != "" {
+		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
+			days = d
+		}
+	}
+
+	cleaner, ok := h.store.(interface {
+		CleanupExpired(before time.Time) (int, error)
+	})
+	if !ok {
+		writeError(w, http.StatusBadRequest, "the current store does not support file cleanup")
+		return
+	}
+
+	threshold := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	count, err := cleaner.CleanupExpired(threshold)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "cleanup failed: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"cleaned_sessions_count": count,
+		"threshold_time":         threshold.Format(time.RFC3339),
+	})
+}
+
+// --- Analytics ---
+
+func (h *APIHandler) getAnalytics(w http.ResponseWriter, r *http.Request) {
+	sessions, _ := h.store.ListSessions(SessionFilter{Limit: 2000})
+
+	var totalScore float64
+	var count int
+	dist := map[string]int{
+		"healthy":  0,
+		"degraded": 0,
+		"poor":     0,
+		"critical": 0,
+	}
+
+	issueMap := make(map[string]int)
+
+	for _, s := range sessions {
+		totalScore += float64(s.Score)
+		count++
+
+		switch {
+		case s.Score >= 80:
+			dist["healthy"]++
+		case s.Score >= 60:
+			dist["degraded"]++
+		case s.Score >= 40:
+			dist["poor"]++
+		default:
+			dist["critical"]++
+		}
+
+		for _, issue := range s.Issues {
+			issueMap[issue.Category]++
+		}
+	}
+
+	avgScore := 0.0
+	if count > 0 {
+		avgScore = totalScore / float64(count)
+	}
+
+	var topIssues []IssueCount
+	for cat, cnt := range issueMap {
+		topIssues = append(topIssues, IssueCount{Category: cat, Count: cnt})
+	}
+	sort.Slice(topIssues, func(i, j int) bool {
+		return topIssues[i].Count > topIssues[j].Count
+	})
+	if len(topIssues) > 10 {
+		topIssues = topIssues[:10]
+	}
+
+	var closedSessions []*SessionRecord
+	for _, s := range sessions {
+		if s.Closed {
+			closedSessions = append(closedSessions, s)
+		}
+	}
+	sort.Slice(closedSessions, func(i, j int) bool {
+		return closedSessions[i].Score < closedSessions[j].Score
+	})
+	worstSessions := closedSessions
+	if len(worstSessions) > 5 {
+		worstSessions = worstSessions[:5]
+	}
+
+	agents := h.store.ListAgents()
+	agentStats := make([]AgentPerfStats, len(agents))
+	for i, a := range agents {
+		activeSess := 0
+		for _, s := range sessions {
+			if !s.Closed && s.NodeName == a.NodeName {
+				activeSess++
+			}
+		}
+
+		agentStats[i] = AgentPerfStats{
+			NodeName:      a.NodeName,
+			Connected:     true,
+			ActiveSession: activeSess,
+			DiscardedEvts: a.DiscardedEvts,
+		}
+	}
+
+	summary := AnalyticsSummary{
+		TotalSessions:     count,
+		ActiveSessions:    h.store.ActiveSessionCount(),
+		AverageScore:      avgScore,
+		ScoreDistribution: dist,
+		TopIssues:         topIssues,
+		WorstSessions:     worstSessions,
+		AgentStats:        agentStats,
+	}
+
+	writeJSON(w, http.StatusOK, summary)
 }

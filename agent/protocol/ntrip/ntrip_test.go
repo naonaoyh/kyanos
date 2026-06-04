@@ -5,6 +5,7 @@ import (
 	"kyanos/agent/protocol"
 	"kyanos/agent/protocol/rtcm"
 	"kyanos/bpf"
+	"math"
 	"strings"
 	"testing"
 )
@@ -347,8 +348,11 @@ func TestNTRIPFilterByProtocol(t *testing.T) {
 	if !f.FilterByProtocol(bpf.AgentTrafficProtocolTKProtocolNTRIP) {
 		t.Error("FilterByProtocol(NTRIP) = false, want true")
 	}
-	if f.FilterByProtocol(bpf.AgentTrafficProtocolTKProtocolHTTP) {
-		t.Error("FilterByProtocol(HTTP) = true, want false")
+	if !f.FilterByProtocol(bpf.AgentTrafficProtocolTKProtocolHTTP) {
+		t.Error("FilterByProtocol(HTTP) = false, want true")
+	}
+	if !f.FilterByProtocol(bpf.AgentTrafficProtocolTKProtocolRTCM) {
+		t.Error("FilterByProtocol(RTCM) = false, want true")
 	}
 }
 
@@ -372,6 +376,35 @@ func TestNTRIPFilterByRequest(t *testing.T) {
 	}
 }
 
+func TestNTRIPFilterByRequestWithExtensions(t *testing.T) {
+	tests := []struct {
+		name         string
+		mountFilter  string
+		wantResponse bool
+	}{
+		{name: "geo fence", mountFilter: "geo:39.9042,116.4074,5000"},
+		{name: "reconnect", mountFilter: "ext:reconnect:24"},
+		{name: "kick", mountFilter: "ext:kick:24"},
+		{name: "scan", mountFilter: "ext:scan:1000"},
+		{name: "nearby", mountFilter: "ext:nearby:1km"},
+		{name: "brute force", mountFilter: "ext:brute:60,2,3", wantResponse: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := NTRIPFilter{TargetMountPoints: []string{tt.mountFilter}}
+			f.InitExtensions()
+
+			if !f.FilterByRequest() {
+				t.Fatal("FilterByRequest() = false, want true")
+			}
+			if got := f.FilterByResponse(); got != tt.wantResponse {
+				t.Fatalf("FilterByResponse() = %v, want %v", got, tt.wantResponse)
+			}
+		})
+	}
+}
+
 func TestNTRIPFilterByResponse(t *testing.T) {
 	// No filters set
 	f1 := NTRIPFilter{}
@@ -389,6 +422,11 @@ func TestNTRIPFilterByResponse(t *testing.T) {
 	f3 := NTRIPFilter{ErrorsOnly: true}
 	if !f3.FilterByResponse() {
 		t.Error("FilterByResponse() with ErrorsOnly = false, want true")
+	}
+
+	f4 := NTRIPFilter{BruteEnable: true}
+	if !f4.FilterByResponse() {
+		t.Error("FilterByResponse() with BruteEnable = false, want true")
 	}
 }
 
@@ -1459,21 +1497,25 @@ func TestNMEASentenceFormatToSummaryString_GGA(t *testing.T) {
 // ==========================================================================
 
 func TestNTRIPFilterUsernames(t *testing.T) {
-	f := NTRIPFilter{TargetUsernames: []string{"admin", "operator"}}
+	f := NTRIPFilter{TargetUsernames: []string{"admin*", "*operator", "exact-user"}}
 
-	reqAdmin := &NTRIPRequest{Username: "admin", SessionType: SessionTypeDataStream}
-	reqOperator := &NTRIPRequest{Username: "operator", SessionType: SessionTypeDataStream}
+	reqAdmin := &NTRIPRequest{Username: "admin-alice", SessionType: SessionTypeDataStream}
+	reqOperator := &NTRIPRequest{Username: "bob-operator", SessionType: SessionTypeDataStream}
+	reqExact := &NTRIPRequest{Username: "exact-user", SessionType: SessionTypeDataStream}
 	reqOther := &NTRIPRequest{Username: "guest", SessionType: SessionTypeDataStream}
 	reqNoAuth := &NTRIPRequest{SessionType: SessionTypeDataStream}
 
 	if !f.Filter(reqAdmin, nil) {
-		t.Error("admin request should pass username filter")
+		t.Error("admin-alice request should pass username wildcard filter")
 	}
 	if !f.Filter(reqOperator, nil) {
-		t.Error("operator request should pass username filter")
+		t.Error("bob-operator request should pass username wildcard filter")
+	}
+	if !f.Filter(reqExact, nil) {
+		t.Error("exact-user request should pass username wildcard filter")
 	}
 	if f.Filter(reqOther, nil) {
-		t.Error("guest request should be rejected by admin/operator filter")
+		t.Error("guest request should be rejected by username filter")
 	}
 	if f.Filter(reqNoAuth, nil) {
 		t.Error("no-auth request should be rejected by username filter")
@@ -1507,5 +1549,230 @@ func TestNTRIPFilterGGAOnly_FilterByRequest(t *testing.T) {
 	f := NTRIPFilter{GGAOnly: true}
 	if !f.FilterByRequest() {
 		t.Error("GGAOnly should make FilterByRequest return true")
+	}
+}
+
+func TestNTRIPFilterGeoFence(t *testing.T) {
+	f := NTRIPFilter{
+		TargetMountPoints: []string{"geo:39.9042,116.4074,5000"},
+	}
+	f.InitExtensions()
+
+	if !f.HasGeoFence {
+		t.Fatal("expected HasGeoFence to be true")
+	}
+
+	ggaInside := &NTRIPNMEASentence{
+		SentenceType: "GGA",
+		GGAParsed:    true,
+		Latitude:     39.9163,
+		Longitude:    116.3972,
+	}
+	if !f.Filter(ggaInside, nil) {
+		t.Error("Forbidden City (inside) should pass the filter")
+	}
+
+	ggaOutside := &NTRIPNMEASentence{
+		SentenceType: "GGA",
+		GGAParsed:    true,
+		Latitude:     39.9989,
+		Longitude:    116.2739,
+	}
+	if f.Filter(ggaOutside, nil) {
+		t.Error("Summer Palace (outside) should be rejected by the filter")
+	}
+
+	ggaBoundaryOutside := &NTRIPNMEASentence{
+		SentenceType: "GGA",
+		GGAParsed:    true,
+		Latitude:     39.9510,
+		Longitude:    116.4074,
+	}
+	if f.Filter(ggaBoundaryOutside, nil) {
+		t.Error("boundary outside point should be rejected")
+	}
+}
+
+func haversine(lat1, lon1, lat2, lon2 float64) float64 {
+	const R = 6371000.0
+	dLat := (lat2 - lat1) * math.Pi / 180.0
+	dLon := (lon2 - lon1) * math.Pi / 180.0
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(lat1*math.Pi/180.0)*math.Cos(lat2*math.Pi/180.0)*
+			math.Sin(dLon/2)*math.Sin(dLon/2)
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	return R * c
+}
+
+func BenchmarkGeoFenceFilter_Proposed(b *testing.B) {
+	f := NTRIPFilter{
+		TargetMountPoints: []string{"geo:39.9042,116.4074,5000"},
+	}
+	f.InitExtensions()
+
+	gga := &NTRIPNMEASentence{
+		SentenceType: "GGA",
+		GGAParsed:    true,
+		Latitude:     39.9163,
+		Longitude:    116.3972,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = f.Filter(gga, nil)
+	}
+}
+
+func BenchmarkGeoFenceFilter_Haversine(b *testing.B) {
+	centerLat, centerLon := 39.9042, 116.4074
+	radius := 5000.0
+	lat, lon := 39.9163, 116.3972
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		dist := haversine(centerLat, centerLon, lat, lon)
+		_ = dist < radius
+	}
+}
+
+func TestNTRIPStateTracker_ReconnectAndKick(t *testing.T) {
+	globalTracker.Reset()
+
+	f := NTRIPFilter{
+		TargetMountPoints: []string{"ext:reconnect:24", "ext:kick:24"},
+	}
+	f.InitExtensions()
+
+	globalTracker.RegisterCapturedUser("admin", "192.168.1.10")
+
+	reqSameNet := &NTRIPRequest{
+		Username: "admin",
+		ClientIP: "192.168.1.50",
+		ConnKey:  "192.168.1.50:1234",
+	}
+	if !f.Filter(reqSameNet, nil) {
+		t.Error("reconnect in same subnet should pass filter")
+	}
+
+	reqDiffNet := &NTRIPRequest{
+		Username: "admin",
+		ClientIP: "10.0.0.5",
+		ConnKey:  "10.0.0.5:1234",
+	}
+	if !f.Filter(reqDiffNet, nil) {
+		t.Error("kick-out connection from different subnet should pass filter")
+	}
+}
+
+func TestNTRIPStateTracker_GridScanning(t *testing.T) {
+	globalTracker.Reset()
+
+	f := NTRIPFilter{
+		TargetMountPoints: []string{"ext:scan:1000"},
+	}
+	f.InitExtensions()
+
+	connKey := "192.168.1.100:5555"
+
+	gga1 := &NTRIPNMEASentence{
+		SentenceType: "GGA",
+		GGAParsed:    true,
+		Latitude:     39.9042,
+		Longitude:    116.4074,
+		ConnKey:      connKey,
+	}
+	f.Filter(gga1, nil)
+
+	if globalTracker.IsCaptured(connKey) {
+		t.Error("should not capture on first GGA report")
+	}
+
+	gga2 := &NTRIPNMEASentence{
+		SentenceType: "GGA",
+		GGAParsed:    true,
+		Latitude:     39.8932,
+		Longitude:    116.4014,
+		ConnKey:      connKey,
+	}
+	if !f.Filter(gga2, nil) {
+		t.Error("GGA distance > 1000m should pass grid scan filter")
+	}
+
+	if !globalTracker.IsCaptured(connKey) {
+		t.Error("connection should be marked as captured after grid scan trigger")
+	}
+}
+
+func TestNTRIPStateTracker_BruteForce(t *testing.T) {
+	globalTracker.Reset()
+
+	f := NTRIPFilter{
+		TargetMountPoints: []string{"ext:brute:60,2,3"},
+	}
+	f.InitExtensions()
+
+	connKey := "192.168.1.10:8888"
+
+	req1 := &NTRIPRequest{Username: "attacker", Password: "p1", ConnKey: connKey}
+	resp1 := &NTRIPResponse{StatusCode: 401, ConnKey: connKey}
+	f.Filter(req1, resp1)
+
+	req2 := &NTRIPRequest{Username: "attacker", Password: "p2", ConnKey: connKey}
+	resp2 := &NTRIPResponse{StatusCode: 401, ConnKey: connKey}
+	f.Filter(req2, resp2)
+
+	if globalTracker.IsCaptured(connKey) {
+		t.Error("should not trigger brute force capture yet")
+	}
+
+	req3 := &NTRIPRequest{Username: "attacker", Password: "p3", ConnKey: connKey}
+	resp3 := &NTRIPResponse{StatusCode: 401, ConnKey: connKey}
+	if !f.Filter(req3, resp3) {
+		t.Error("brute force condition met, should pass filter")
+	}
+
+	if !globalTracker.IsCaptured(connKey) {
+		t.Error("connection should be marked as captured by brute force trigger")
+	}
+}
+
+func TestNTRIPStateTracker_NearbyCorrelation(t *testing.T) {
+	globalTracker.Reset()
+
+	f := NTRIPFilter{
+		TargetMountPoints: []string{"ext:nearby:1000"},
+	}
+	f.InitExtensions()
+
+	capturedConn := "192.168.1.1:1111"
+	nearbyConn := "192.168.1.2:2222"
+
+	globalTracker.MarkCapturedWithUser(capturedConn, "userA")
+	globalTracker.UpdateCapturedPoint(capturedConn, "userA", 39.9042, 116.4074)
+
+	ggaFar := &NTRIPNMEASentence{
+		SentenceType: "GGA",
+		GGAParsed:    true,
+		Latitude:     39.9163,
+		Longitude:    116.3972,
+		ConnKey:      nearbyConn,
+	}
+	if f.Filter(ggaFar, nil) {
+		t.Error("GGA beyond 1km nearby threshold should not be captured")
+	}
+
+	ggaClose := &NTRIPNMEASentence{
+		SentenceType: "GGA",
+		GGAParsed:    true,
+		Latitude:     39.9090,
+		Longitude:    116.3980,
+		ConnKey:      nearbyConn,
+	}
+	if !f.Filter(ggaClose, nil) {
+		t.Error("GGA inside 1km nearby threshold should pass nearby filter")
+	}
+
+	if !globalTracker.IsCaptured(nearbyConn) {
+		t.Error("nearby connection should be marked captured")
 	}
 }

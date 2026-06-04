@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getSession, getSessionEvents } from '../api'
 import EventTimeline from '../components/EventTimeline.vue'
@@ -9,6 +9,8 @@ const router = useRouter()
 const session = ref(null)
 const events = ref([])
 const loading = ref(false)
+
+let socket = null
 
 const sessionStats = computed(() => {
   if (!session.value) return null
@@ -39,6 +41,88 @@ const formatDuration = (ms) => {
   return `${s}s`
 }
 
+const connectWebSocket = () => {
+  if (session.value && session.value.closed) {
+    return
+  }
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = window.location.host
+  const url = `${protocol}//${host}/api/v1/ws/sessions/${route.params.id}`
+  
+  socket = new WebSocket(url)
+  
+  socket.onopen = () => {
+    console.log('WebSocket connected for session:', route.params.id)
+  }
+  
+  socket.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'session_event') {
+        const evt = msg.data
+        if (!evt) return
+        // Avoid duplicate events
+        if (!events.value.some(e => e.timestamp_ns === evt.timestamp_ns && e.event_type === evt.event_type)) {
+          events.value.push(evt)
+          events.value.sort((a, b) => a.timestamp_ns - b.timestamp_ns)
+          
+          // Live statistics updates
+          if (session.value) {
+            if (evt.event_type === 'rtcm') {
+              session.value.rtcm_frames = (session.value.rtcm_frames || 0) + 1
+              if (evt.event_data) {
+                session.value.rtcm_bytes = (session.value.rtcm_bytes || 0) + (evt.event_data.size || 0)
+                if (!evt.event_data.crc_valid) {
+                  session.value.rtcm_crc_errors = (session.value.rtcm_crc_errors || 0) + 1
+                }
+              }
+            } else if (evt.event_type === 'gga') {
+              session.value.gga_events = (session.value.gga_events || 0) + 1
+            } else if (evt.event_type === 'network') {
+              if (evt.event_data) {
+                session.value.retransmissions = (session.value.retransmissions || 0) + (evt.event_data.retransmissions || 0)
+                session.value.tcp_resets = (session.value.tcp_resets || 0) + (evt.event_data.tcp_resets || 0)
+                if (evt.event_data.avg_rtt_us > 0) {
+                  session.value.avg_rtt_ms = evt.event_data.avg_rtt_us / 1000.0
+                }
+              }
+            }
+          }
+        }
+      } else if (msg.type === 'session_update') {
+        session.value = msg.data
+        if (session.value && session.value.closed) {
+          closeWebSocket()
+        }
+      }
+    } catch (e) {
+      console.error('Failed to parse WebSocket message:', e)
+    }
+  }
+  
+  socket.onclose = (e) => {
+    console.log('WebSocket closed for session:', route.params.id, e.reason)
+    if (session.value && !session.value.closed) {
+      setTimeout(() => {
+        console.log('Attempting to reconnect WebSocket...')
+        connectWebSocket()
+      }, 3000)
+    }
+  }
+  
+  socket.onerror = (err) => {
+    console.error('WebSocket error:', err)
+    socket.close()
+  }
+}
+
+const closeWebSocket = () => {
+  if (socket) {
+    socket.close()
+    socket = null
+  }
+}
+
 onMounted(async () => {
   loading.value = true
   try {
@@ -48,11 +132,16 @@ onMounted(async () => {
     ])
     session.value = sessResp.data
     events.value = evtsResp.data.items || []
+    connectWebSocket()
   } catch (e) {
     console.error('Failed to load session:', e)
   } finally {
     loading.value = false
   }
+})
+
+onUnmounted(() => {
+  closeWebSocket()
 })
 </script>
 

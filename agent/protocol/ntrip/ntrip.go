@@ -47,6 +47,9 @@ type NTRIPRequest struct {
 	Password    string           // Extracted password (from Basic auth or SOURCE method)
 	UserAgent   string           // Client User-Agent string
 	ContentType string           // Content-Type header (v2 POST may carry gnss/data)
+	ClientIP    string
+	ClientPort  uint16
+	ConnKey     string
 }
 
 func (r *NTRIPRequest) IsReq() bool                 { return true }
@@ -98,6 +101,9 @@ type NTRIPResponse struct {
 	HasSourcetable bool             // Whether response body contains a sourcetable
 	Sourcetable    *Sourcetable     // Parsed sourcetable (if applicable)
 	BodyLen        int              // Body length in bytes
+	ClientIP       string
+	ClientPort     uint16
+	ConnKey        string
 }
 
 func (r *NTRIPResponse) IsReq() bool                 { return false }
@@ -142,10 +148,14 @@ func (r *NTRIPResponse) FormatToSummaryString() string {
 // NTRIPRTCMFrame wraps an RTCM frame observed within an NTRIP data stream.
 type NTRIPRTCMFrame struct {
 	protocol.FrameBase
-	Inner *rtcm.RTCMFrame // The underlying RTCM frame
+	Inner      *rtcm.RTCMFrame // The underlying RTCM frame
+	ClientIP   string
+	ClientPort uint16
+	ConnKey    string
+	isReq      bool
 }
 
-func (f *NTRIPRTCMFrame) IsReq() bool                 { return true }
+func (f *NTRIPRTCMFrame) IsReq() bool                 { return false }
 func (f *NTRIPRTCMFrame) StreamId() protocol.StreamId { return 0 }
 
 func (f *NTRIPRTCMFrame) FormatToString() string {
@@ -173,6 +183,10 @@ type NTRIPNMEASentence struct {
 	Altitude      float64 // Antenna altitude above MSL (metres)
 	DiffAge       float64 // Age of differential GPS data in seconds (-1 if not present)
 	DiffStationID string  // Differential reference station ID (empty if not present)
+	ClientIP      string
+	ClientPort    uint16
+	ConnKey       string
+	isReq         bool
 }
 
 func (s *NTRIPNMEASentence) IsReq() bool                 { return true }
@@ -374,19 +388,31 @@ func (p *NTRIPStreamParser) ParseStream(
 		return protocol.ParseResult{ParseState: protocol.NeedsMoreData}
 	}
 
-	// Auto-detect mode from first byte
-	if p.mode == modeAutoDetect {
-		p.detectMode(buf)
+	// 1. 如果以 '$' 开头，一定是 NMEA 语句（GGA 语句等）
+	if buf[0] == '$' {
+		return p.parseNMEA(buf, streamBuffer, messageType)
 	}
 
-	switch p.mode {
-	case modeRequestSide:
-		return p.parseRequestSide(buf, streamBuffer)
-	case modeResponseSide:
-		return p.parseResponseSide(buf, streamBuffer, messageType)
-	default:
-		return protocol.ParseResult{ParseState: protocol.Invalid}
+	// 2. 如果以 0xD3 开头且符合 RTCM 帧头，一定是 RTCM 帧
+	if buf[0] == 0xD3 && len(buf) >= 3 && (buf[1]&0xFC) == 0x00 {
+		return p.parseRTCMFrame(buf, streamBuffer, messageType)
 	}
+
+	// 3. 检查是否匹配 HTTP-like 请求前缀
+	for _, prefix := range ntripReqPrefixes {
+		if len(buf) >= len(prefix) && string(buf[:len(prefix)]) == prefix {
+			return p.parseRequest(buf, streamBuffer)
+		}
+	}
+
+	// 4. 检查是否匹配 HTTP-like 响应前缀
+	for _, prefix := range ntripRespPrefixes {
+		if len(buf) >= len(prefix) && string(buf[:len(prefix)]) == prefix {
+			return p.parseResponse(buf, streamBuffer)
+		}
+	}
+
+	return protocol.ParseResult{ParseState: protocol.Invalid}
 }
 
 // detectMode sets the parser mode based on the first bytes of the buffer.
@@ -406,6 +432,13 @@ func (p *NTRIPStreamParser) detectMode(buf []byte) {
 	// If starts with '$', it's NMEA from client side
 	if len(buf) > 0 && buf[0] == '$' {
 		p.mode = modeRequestSide
+		return
+	}
+	// RTCM preamble (0xD3 with reserved bits zero) → response side
+	// This handles the case where BPF misassigns the role and RTCM data
+	// lands in the request buffer.
+	if len(buf) >= 3 && buf[0] == 0xD3 && (buf[1]&0xFC) == 0x00 {
+		p.mode = modeResponseSide
 	}
 }
 
@@ -422,7 +455,7 @@ func (p *NTRIPStreamParser) parseRequestSide(
 
 	// NMEA sentence (post-handshake backchannel)
 	if buf[0] == '$' {
-		return p.parseNMEA(buf, streamBuffer)
+		return p.parseNMEA(buf, streamBuffer, protocol.Request)
 	}
 
 	// HTTP-like request
@@ -850,7 +883,7 @@ func (p *NTRIPStreamParser) parseRTCMFrame(
 // parseNMEA parses an NMEA sentence from the client backchannel.
 // NMEA sentences are ASCII text starting with '$' and ending with '*XX\r\n'.
 func (p *NTRIPStreamParser) parseNMEA(
-	buf []byte, streamBuffer *buffer.StreamBuffer,
+	buf []byte, streamBuffer *buffer.StreamBuffer, messageType protocol.MessageType,
 ) protocol.ParseResult {
 	if len(buf) < 6 || buf[0] != '$' {
 		return protocol.ParseResult{ParseState: protocol.Invalid}

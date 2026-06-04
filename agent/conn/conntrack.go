@@ -66,6 +66,7 @@ type Connection4 struct {
 	SizeFilter    protocol.SizeFilter
 
 	prevConn []*Connection4
+	httpFinalized bool
 }
 
 func NewConnFromEvent(event *bpf.AgentConnEvtT, p *Processor) *Connection4 {
@@ -464,8 +465,67 @@ func extractHeaderEvent(data []byte, ke *bpf.AgentKernEvt, c *Connection4) *bpf.
 }
 
 func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernEvt) bool {
+	if (c.Protocol == bpf.AgentTrafficProtocolTKProtocolHTTP || c.Protocol == bpf.AgentTrafficProtocolTKProtocolUnset || c.Protocol == bpf.AgentTrafficProtocolTKProtocolUnknown) && !c.httpFinalized && len(data) > 0 {
+		hasFinalizedPrefix := false
+		for _, prefix := range []string{"POST ", "PUT ", "OPTIONS ", "DELETE ", "PATCH ", "HEAD "} {
+			if len(data) >= len(prefix) && string(data[:len(prefix)]) == prefix {
+				hasFinalizedPrefix = true
+				break
+			}
+		}
+		if hasFinalizedPrefix {
+			c.httpFinalized = true
+		} else {
+			isNTRIP := false
+			if data[0] == '$' {
+				isNTRIP = true
+			} else if data[0] == 0xD3 && len(data) >= 3 && (data[1]&0xFC) == 0x00 {
+				isNTRIP = true
+			} else {
+				for _, prefix := range []string{"ICY ", "SOURCETABLE ", "SOURCE ", "Ntrip-Version: "} {
+					if len(data) >= len(prefix) && string(data[:len(prefix)]) == prefix {
+						isNTRIP = true
+						break
+					}
+				}
+			}
+			if isNTRIP {
+				c.Protocol = bpf.AgentTrafficProtocolTKProtocolNTRIP
+			}
+		}
+	}
+
 	addedToBuffer := false
 	isReq, _ := isReq(c, ke)
+	if c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && len(data) > 0 {
+		if data[0] == '$' {
+			isReq = true
+		} else if data[0] == 0xD3 && len(data) >= 3 && (data[1]&0xFC) == 0x00 {
+			isReq = false
+		} else {
+			isRequestPrefix := false
+			for _, prefix := range []string{"GET ", "POST ", "SOURCE "} {
+				if len(data) >= len(prefix) && string(data[:len(prefix)]) == prefix {
+					isRequestPrefix = true
+					break
+				}
+			}
+			if isRequestPrefix {
+				isReq = true
+			} else {
+				isResponsePrefix := false
+				for _, prefix := range []string{"HTTP/1.1 ", "HTTP/1.0 ", "ICY ", "SOURCETABLE ", "ERROR "} {
+					if len(data) >= len(prefix) && string(data[:len(prefix)]) == prefix {
+						isResponsePrefix = true
+						break
+					}
+				}
+				if isResponsePrefix {
+					isReq = false
+				}
+			}
+		}
+	}
 	headerEvt := extractHeaderEvent(data, ke, c)
 	if isReq {
 		if headerEvt != nil {
@@ -847,11 +907,26 @@ func (c *Connection4) StatusString() string {
 }
 
 func (c *Connection4) GetProtocolParser(p bpf.AgentTrafficProtocolT) protocol.ProtocolStreamParser {
-	if parser, ok := c.protocolParsers[p]; ok {
+	// Parser remapping: when the user-requested protocol (from MessageFilter)
+	// differs from the BPF-inferred protocol but the filter accepts it, use the
+	// user-requested parser. This handles the NTRIP case where BPF infers HTTP
+	// (from a GET request) but the NTRIP parser should handle the full session
+	// lifecycle including ICY responses, NMEA GGA, and RTCM binary frames.
+	effectiveProtocol := p
+	if c.MessageFilter != nil {
+		desired := c.MessageFilter.Protocol()
+		if desired != p &&
+			desired != bpf.AgentTrafficProtocolTKProtocolUnset &&
+			c.MessageFilter.FilterByProtocol(p) {
+			effectiveProtocol = desired
+		}
+	}
+
+	if parser, ok := c.protocolParsers[effectiveProtocol]; ok {
 		return parser
 	} else {
-		parser := protocol.GetParserByProtocol(p)
-		c.protocolParsers[p] = parser
+		parser := protocol.GetParserByProtocol(effectiveProtocol)
+		c.protocolParsers[effectiveProtocol] = parser
 		return parser
 	}
 }

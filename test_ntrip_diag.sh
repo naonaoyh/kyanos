@@ -15,10 +15,10 @@
 
 set -e
 export PATH=/usr/local/go/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH
-PROJDIR=/home/naonaoyh/projects/kyanos
+PROJDIR=/mnt/e/Work/kyanos
 cd $PROJDIR
 
-CASTER_PORT=2106
+CASTER_PORT=25326
 DIAG_LOG=/tmp/kyanos_diag.log
 JSONL_LOG=/tmp/kyanos_sessions.jsonl
 

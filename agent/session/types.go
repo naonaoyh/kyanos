@@ -33,6 +33,8 @@ type NTRIPSession struct {
 	ServerPod    string // DS Pod handling this connection (empty if not in K8s mode)
 	ServerNode   string // Node where DS Pod runs
 	ServerIP     string // Server-side IP; used as pod-load fallback key when ServerPod is empty
+	ClientRole   string // "Rover" | "Source" | "Unknown"
+	ServerRole   string // "Caster" | "Unknown"
 
 	// Connection timing
 	ConnStartTime time.Time

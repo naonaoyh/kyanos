@@ -12,6 +12,7 @@ package console
 import (
 	"context"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -208,6 +209,17 @@ func (h *AgentServiceHandler) StartCapture(ctx context.Context, task *agentpb.Ca
 		ExportParsed:    task.Export != nil && task.Export.ExportParsed,
 		COSBucket:       task.GetExport().GetCosBucket(),
 	}
+	if task.NtripFilter != nil {
+		t.NtripFilter = &NtripFilterView{
+			Mountpoints: task.NtripFilter.Mountpoints,
+			Usernames:   task.NtripFilter.Usernames,
+		}
+	}
+	if task.RtcmFilter != nil {
+		t.RtcmFilter = &RtcmFilterView{
+			MessageTypes: task.RtcmFilter.MessageTypes,
+		}
+	}
 	h.store.SaveTask(t)
 
 	// Build the command and try to send it immediately.
@@ -219,18 +231,50 @@ func (h *AgentServiceHandler) StartCapture(ctx context.Context, task *agentpb.Ca
 
 	h.mu.RLock()
 	var sent bool
-	for _, conn := range h.agents {
-		// For now, broadcast to all connected agents. In production,
-		// route based on target_pod / node affinity.
-		conn.mu.Lock()
-		err := conn.cmdSink.Send(cmd)
-		conn.mu.Unlock()
-		if err == nil {
-			sent = true
-			t.NodeName = conn.info.NodeName
+
+	// Node/Pod Affinity routing.
+	targetNodes := make(map[string]bool)
+	if task.TargetPod != "" {
+		agents := h.store.ListAgents()
+		for _, a := range agents {
+			for _, p := range a.ManagedPods {
+				// Match pod name (supports wildcard pattern) and optionally namespace
+				if matchWildcard(task.TargetPod, p.PodName) && (task.TargetNamespace == "" || p.Namespace == task.TargetNamespace) {
+					targetNodes[a.NodeName] = true
+				}
+			}
 		}
 	}
-	// If no agent connected, queue the command for later delivery.
+
+	// Try to route directly to matched affinity Node Agent connections.
+	if len(targetNodes) > 0 {
+		for targetNodeName := range targetNodes {
+			if conn, ok := h.agents[targetNodeName]; ok {
+				conn.mu.Lock()
+				err := conn.cmdSink.Send(cmd)
+				conn.mu.Unlock()
+				if err == nil {
+					sent = true
+					t.NodeName = targetNodeName
+				}
+			}
+		}
+	}
+
+	// Broadcast backup / fallback if not sent.
+	if !sent {
+		for _, conn := range h.agents {
+			conn.mu.Lock()
+			err := conn.cmdSink.Send(cmd)
+			conn.mu.Unlock()
+			if err == nil {
+				sent = true
+				t.NodeName = conn.info.NodeName
+			}
+		}
+	}
+
+	// If no agent connected or accepted, queue the command for later delivery.
 	if !sent {
 		h.taskCommands[task.TaskId] = cmd
 	}
@@ -338,4 +382,20 @@ func (h *AgentServiceHandler) peerNodeName(ctx context.Context) string {
 		return ""
 	}
 	return p.Addr.String()
+}
+
+// matchWildcard returns true if value matches the wildcard pattern.
+func matchWildcard(pattern, value string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasSuffix(pattern, "*") {
+		prefix := pattern[:len(pattern)-1]
+		return strings.HasPrefix(value, prefix)
+	}
+	if strings.HasPrefix(pattern, "*") {
+		suffix := pattern[1:]
+		return strings.HasSuffix(value, suffix)
+	}
+	return pattern == value
 }

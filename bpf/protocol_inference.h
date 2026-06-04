@@ -484,7 +484,7 @@ static __inline enum message_type_t is_dns_protocol(const char* buf, size_t coun
   return (qr == 0) ? kRequest : kResponse;
 }
 
-#define TRACE_PROTOCOL(p) (trace_protocol == kProtocolUnset || trace_protocol == p)
+#define TRACE_PROTOCOL(p) (trace_protocol == kProtocolUnset || trace_protocol == p || (p == kProtocolHTTP && trace_protocol == kProtocolNTRIP) || (p == kProtocolRTCM && trace_protocol == kProtocolNTRIP))
 
 static __always_inline struct protocol_message_t infer_protocol(const char *buf, size_t count, 
     size_t total_count, struct conn_info_t *conn_info, enum traffic_protocol_t trace_protocol) {

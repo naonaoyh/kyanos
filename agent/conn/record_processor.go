@@ -2,7 +2,10 @@ package conn
 
 import (
 	"cmp"
+	"fmt"
 	"kyanos/agent/protocol"
+	"kyanos/agent/protocol/ntrip"
+	"kyanos/bpf"
 	"kyanos/common"
 	"slices"
 	"time"
@@ -21,7 +24,12 @@ func (p *RecordsProcessor) Run(recordChannel <-chan RecordWithConn, ticker *time
 	for {
 		select {
 		case r := <-recordChannel:
-			p.records = append(p.records, r)
+			common.AgentLog.Debugf("[RecordsProcessor] Received record: Req=%T, Resp=%T, conn=%s", r.Req, r.Resp, r.Connection4.ToString())
+			if r.IsUnidirectional() {
+				submitRecord(r.Record, r.Connection4)
+			} else {
+				p.records = append(p.records, r)
+			}
 		case <-ticker.C:
 			if len(p.records) == 0 {
 				continue
@@ -45,10 +53,52 @@ func (p *RecordsProcessor) Run(recordChannel <-chan RecordWithConn, ticker *time
 	}
 }
 
+func bindNTRIPConnInfo(req protocol.ParsedMessage, resp protocol.ParsedMessage, c *Connection4) {
+	clientIP := ""
+	var clientPort uint16
+	if c.Role == bpf.AgentEndpointRoleTKRoleServer {
+		clientIP = c.RemoteIp.String()
+		clientPort = uint16(c.RemotePort)
+	} else {
+		clientIP = c.LocalIp.String()
+		clientPort = uint16(c.LocalPort)
+	}
+
+	connKey := fmt.Sprintf("%s:%d", clientIP, clientPort)
+
+	if req != nil {
+		if r, ok := req.(*ntrip.NTRIPRequest); ok {
+			r.ClientIP = clientIP
+			r.ClientPort = clientPort
+			r.ConnKey = connKey
+		} else if n, ok := req.(*ntrip.NTRIPNMEASentence); ok {
+			n.ClientIP = clientIP
+			n.ClientPort = clientPort
+			n.ConnKey = connKey
+		} else if rt, ok := req.(*ntrip.NTRIPRTCMFrame); ok {
+			rt.ClientIP = clientIP
+			rt.ClientPort = clientPort
+			rt.ConnKey = connKey
+		}
+	}
+	if resp != nil {
+		if r, ok := resp.(*ntrip.NTRIPResponse); ok {
+			r.ClientIP = clientIP
+			r.ClientPort = clientPort
+			r.ConnKey = connKey
+		} else if rt, ok := resp.(*ntrip.NTRIPRTCMFrame); ok {
+			rt.ClientIP = clientIP
+			rt.ClientPort = clientPort
+			rt.ConnKey = connKey
+		}
+	}
+}
+
 func submitRecord(record protocol.Record, c *Connection4) {
 	var needSubmit bool
 
 	needSubmit = c.MessageFilter.FilterByProtocol(c.Protocol)
+	common.AgentLog.Debugf("[submitRecord] FilterByProtocol: %v, conn=%s", needSubmit, c.ToString())
 
 	// Unidirectional protocols (RTCM, and RTCM/NMEA frames inside an NTRIP
 	// stream) produce records with no paired response. Treat their duration as
@@ -58,6 +108,7 @@ func submitRecord(record protocol.Record, c *Connection4) {
 		duration = record.EffectiveResponse().TimestampNs() - record.Request().TimestampNs()
 	}
 	needSubmit = needSubmit && c.LatencyFilter.Filter(float64(duration)/1000000)
+	common.AgentLog.Debugf("[submitRecord] LatencyFilter: %v, duration=%d", needSubmit, duration)
 
 	reqSize := int64(0)
 	if record.Request() != nil {
@@ -66,6 +117,7 @@ func submitRecord(record protocol.Record, c *Connection4) {
 	needSubmit = needSubmit &&
 		c.SizeFilter.FilterByReqSize(reqSize) &&
 		c.SizeFilter.FilterByRespSize(int64(record.EffectiveResponse().ByteSize()))
+	common.AgentLog.Debugf("[submitRecord] SizeFilter: %v, reqSize=%d, respSize=%d", needSubmit, reqSize, record.EffectiveResponse().ByteSize())
 
 	// Force-parse messages when export is configured, even if filters don't require it
 	forceParse := RecordExportFunc != nil
@@ -84,10 +136,14 @@ func submitRecord(record protocol.Record, c *Connection4) {
 			RecordExportFunc(record)
 		}
 
+		bindNTRIPConnInfo(parsedRequest, parsedResponse, c)
+
 		if parsedRequest != nil || parsedResponse != nil {
 			needSubmit = needSubmit && c.MessageFilter.Filter(parsedRequest, parsedResponse)
 		}
+		common.AgentLog.Debugf("[submitRecord] MessageFilter.Filter: %v, parsedReq=%T, parsedResp=%T", needSubmit, parsedRequest, parsedResponse)
 	}
+	common.AgentLog.Debugf("[submitRecord] Final needSubmit: %v", needSubmit)
 	if needSubmit {
 		RecordFunc(record, c)
 	}

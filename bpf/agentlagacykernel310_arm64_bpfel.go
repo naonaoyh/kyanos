@@ -47,9 +47,10 @@ func LoadAgentLagacyKernel310Objects(obj interface{}, opts *ebpf.CollectionOptio
 type AgentLagacyKernel310Specs struct {
 	AgentLagacyKernel310ProgramSpecs
 	AgentLagacyKernel310MapSpecs
+	AgentLagacyKernel310VariableSpecs
 }
 
-// AgentLagacyKernel310Specs contains programs before they are loaded into the kernel.
+// AgentLagacyKernel310ProgramSpecs contains programs before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type AgentLagacyKernel310ProgramSpecs struct {
@@ -155,6 +156,7 @@ type AgentLagacyKernel310MapSpecs struct {
 	EnabledLocalPortMap   *ebpf.MapSpec `ebpf:"enabled_local_port_map"`
 	EnabledRemoteIpMap    *ebpf.MapSpec `ebpf:"enabled_remote_ip_map"`
 	EnabledRemotePortMap  *ebpf.MapSpec `ebpf:"enabled_remote_port_map"`
+	FilterCgroupMap       *ebpf.MapSpec `ebpf:"filter_cgroup_map"`
 	FilterMntnsMap        *ebpf.MapSpec `ebpf:"filter_mntns_map"`
 	FilterNetnsMap        *ebpf.MapSpec `ebpf:"filter_netns_map"`
 	FilterPidMap          *ebpf.MapSpec `ebpf:"filter_pid_map"`
@@ -179,12 +181,39 @@ type AgentLagacyKernel310MapSpecs struct {
 	WriteArgsMap          *ebpf.MapSpec `ebpf:"write_args_map"`
 }
 
+// AgentLagacyKernel310VariableSpecs contains global variables before they are loaded into the kernel.
+//
+// It can be passed ebpf.CollectionSpec.Assign.
+type AgentLagacyKernel310VariableSpecs struct {
+	ConnEvtT_unused           *ebpf.VariableSpec `ebpf:"conn_evt_t_unused"`
+	ConnIdS_tUnused           *ebpf.VariableSpec `ebpf:"conn_id_s_t_unused"`
+	ConnInfoT_unused          *ebpf.VariableSpec `ebpf:"conn_info_t_unused"`
+	ConnTraceStateT_unused    *ebpf.VariableSpec `ebpf:"conn_trace_state_t_unused"`
+	ConnTypeT_unused          *ebpf.VariableSpec `ebpf:"conn_type_t_unused"`
+	ControlValueIndexT_unused *ebpf.VariableSpec `ebpf:"control_value_index_t_unused"`
+	EndpointRoleUnused        *ebpf.VariableSpec `ebpf:"endpoint_role_unused"`
+	FirstPacketEvtUnused      *ebpf.VariableSpec `ebpf:"first_packet_evt_unused"`
+	In6AddrUnused             *ebpf.VariableSpec `ebpf:"in6_addr_unused"`
+	KInvalidFD                *ebpf.VariableSpec `ebpf:"kInvalidFD"`
+	KernEvtDataUnused         *ebpf.VariableSpec `ebpf:"kern_evt_data_unused"`
+	KernEvtSslDataUnused      *ebpf.VariableSpec `ebpf:"kern_evt_ssl_data_unused"`
+	KernEvtUnused             *ebpf.VariableSpec `ebpf:"kern_evt_unused"`
+	ProcessExecEventUnused    *ebpf.VariableSpec `ebpf:"process_exec_event_unused"`
+	ProcessExitEventUnused    *ebpf.VariableSpec `ebpf:"process_exit_event_unused"`
+	SockKeyUnused             *ebpf.VariableSpec `ebpf:"sock_key_unused"`
+	SourceFunctionT_unused    *ebpf.VariableSpec `ebpf:"source_function_t_unused"`
+	StepT_unused              *ebpf.VariableSpec `ebpf:"step_t_unused"`
+	TrafficDirectionT_unused  *ebpf.VariableSpec `ebpf:"traffic_direction_t_unused"`
+	TrafficProtocolT_unused   *ebpf.VariableSpec `ebpf:"traffic_protocol_t_unused"`
+}
+
 // AgentLagacyKernel310Objects contains all objects after they have been loaded into the kernel.
 //
 // It can be passed to LoadAgentLagacyKernel310Objects or ebpf.CollectionSpec.LoadAndAssign.
 type AgentLagacyKernel310Objects struct {
 	AgentLagacyKernel310Programs
 	AgentLagacyKernel310Maps
+	AgentLagacyKernel310Variables
 }
 
 func (o *AgentLagacyKernel310Objects) Close() error {
@@ -213,6 +242,7 @@ type AgentLagacyKernel310Maps struct {
 	EnabledLocalPortMap   *ebpf.Map `ebpf:"enabled_local_port_map"`
 	EnabledRemoteIpMap    *ebpf.Map `ebpf:"enabled_remote_ip_map"`
 	EnabledRemotePortMap  *ebpf.Map `ebpf:"enabled_remote_port_map"`
+	FilterCgroupMap       *ebpf.Map `ebpf:"filter_cgroup_map"`
 	FilterMntnsMap        *ebpf.Map `ebpf:"filter_mntns_map"`
 	FilterNetnsMap        *ebpf.Map `ebpf:"filter_netns_map"`
 	FilterPidMap          *ebpf.Map `ebpf:"filter_pid_map"`
@@ -254,6 +284,7 @@ func (m *AgentLagacyKernel310Maps) Close() error {
 		m.EnabledLocalPortMap,
 		m.EnabledRemoteIpMap,
 		m.EnabledRemotePortMap,
+		m.FilterCgroupMap,
 		m.FilterMntnsMap,
 		m.FilterNetnsMap,
 		m.FilterPidMap,
@@ -277,6 +308,32 @@ func (m *AgentLagacyKernel310Maps) Close() error {
 		m.SyscallRb,
 		m.WriteArgsMap,
 	)
+}
+
+// AgentLagacyKernel310Variables contains all global variables after they have been loaded into the kernel.
+//
+// It can be passed to LoadAgentLagacyKernel310Objects or ebpf.CollectionSpec.LoadAndAssign.
+type AgentLagacyKernel310Variables struct {
+	ConnEvtT_unused           *ebpf.Variable `ebpf:"conn_evt_t_unused"`
+	ConnIdS_tUnused           *ebpf.Variable `ebpf:"conn_id_s_t_unused"`
+	ConnInfoT_unused          *ebpf.Variable `ebpf:"conn_info_t_unused"`
+	ConnTraceStateT_unused    *ebpf.Variable `ebpf:"conn_trace_state_t_unused"`
+	ConnTypeT_unused          *ebpf.Variable `ebpf:"conn_type_t_unused"`
+	ControlValueIndexT_unused *ebpf.Variable `ebpf:"control_value_index_t_unused"`
+	EndpointRoleUnused        *ebpf.Variable `ebpf:"endpoint_role_unused"`
+	FirstPacketEvtUnused      *ebpf.Variable `ebpf:"first_packet_evt_unused"`
+	In6AddrUnused             *ebpf.Variable `ebpf:"in6_addr_unused"`
+	KInvalidFD                *ebpf.Variable `ebpf:"kInvalidFD"`
+	KernEvtDataUnused         *ebpf.Variable `ebpf:"kern_evt_data_unused"`
+	KernEvtSslDataUnused      *ebpf.Variable `ebpf:"kern_evt_ssl_data_unused"`
+	KernEvtUnused             *ebpf.Variable `ebpf:"kern_evt_unused"`
+	ProcessExecEventUnused    *ebpf.Variable `ebpf:"process_exec_event_unused"`
+	ProcessExitEventUnused    *ebpf.Variable `ebpf:"process_exit_event_unused"`
+	SockKeyUnused             *ebpf.Variable `ebpf:"sock_key_unused"`
+	SourceFunctionT_unused    *ebpf.Variable `ebpf:"source_function_t_unused"`
+	StepT_unused              *ebpf.Variable `ebpf:"step_t_unused"`
+	TrafficDirectionT_unused  *ebpf.Variable `ebpf:"traffic_direction_t_unused"`
+	TrafficProtocolT_unused   *ebpf.Variable `ebpf:"traffic_protocol_t_unused"`
 }
 
 // AgentLagacyKernel310Programs contains all programs after they have been loaded into the kernel.

@@ -47,9 +47,10 @@ func LoadOpenssl102aObjects(obj interface{}, opts *ebpf.CollectionOptions) error
 type Openssl102aSpecs struct {
 	Openssl102aProgramSpecs
 	Openssl102aMapSpecs
+	Openssl102aVariableSpecs
 }
 
-// Openssl102aSpecs contains programs before they are loaded into the kernel.
+// Openssl102aProgramSpecs contains programs before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type Openssl102aProgramSpecs struct {
@@ -77,6 +78,7 @@ type Openssl102aMapSpecs struct {
 	ConnEvtRb             *ebpf.MapSpec `ebpf:"conn_evt_rb"`
 	ConnInfoMap           *ebpf.MapSpec `ebpf:"conn_info_map"`
 	ControlValues         *ebpf.MapSpec `ebpf:"control_values"`
+	FilterCgroupMap       *ebpf.MapSpec `ebpf:"filter_cgroup_map"`
 	FilterMntnsMap        *ebpf.MapSpec `ebpf:"filter_mntns_map"`
 	FilterNetnsMap        *ebpf.MapSpec `ebpf:"filter_netns_map"`
 	FilterPidMap          *ebpf.MapSpec `ebpf:"filter_pid_map"`
@@ -91,12 +93,33 @@ type Openssl102aMapSpecs struct {
 	SyscallRb             *ebpf.MapSpec `ebpf:"syscall_rb"`
 }
 
+// Openssl102aVariableSpecs contains global variables before they are loaded into the kernel.
+//
+// It can be passed ebpf.CollectionSpec.Assign.
+type Openssl102aVariableSpecs struct {
+	ConnEvtT_unused           *ebpf.VariableSpec `ebpf:"conn_evt_t_unused"`
+	ConnIdS_tUnused           *ebpf.VariableSpec `ebpf:"conn_id_s_t_unused"`
+	ConnInfoT_unused          *ebpf.VariableSpec `ebpf:"conn_info_t_unused"`
+	ConnTypeT_unused          *ebpf.VariableSpec `ebpf:"conn_type_t_unused"`
+	ControlValueIndexT_unused *ebpf.VariableSpec `ebpf:"control_value_index_t_unused"`
+	EndpointRoleUnused        *ebpf.VariableSpec `ebpf:"endpoint_role_unused"`
+	KInvalidFD                *ebpf.VariableSpec `ebpf:"kInvalidFD"`
+	KernEvtDataUnused         *ebpf.VariableSpec `ebpf:"kern_evt_data_unused"`
+	KernEvtSslDataUnused      *ebpf.VariableSpec `ebpf:"kern_evt_ssl_data_unused"`
+	KernEvtUnused             *ebpf.VariableSpec `ebpf:"kern_evt_unused"`
+	SockKeyUnused             *ebpf.VariableSpec `ebpf:"sock_key_unused"`
+	StepT_unused              *ebpf.VariableSpec `ebpf:"step_t_unused"`
+	TrafficDirectionT_unused  *ebpf.VariableSpec `ebpf:"traffic_direction_t_unused"`
+	TrafficProtocolT_unused   *ebpf.VariableSpec `ebpf:"traffic_protocol_t_unused"`
+}
+
 // Openssl102aObjects contains all objects after they have been loaded into the kernel.
 //
 // It can be passed to LoadOpenssl102aObjects or ebpf.CollectionSpec.LoadAndAssign.
 type Openssl102aObjects struct {
 	Openssl102aPrograms
 	Openssl102aMaps
+	Openssl102aVariables
 }
 
 func (o *Openssl102aObjects) Close() error {
@@ -116,6 +139,7 @@ type Openssl102aMaps struct {
 	ConnEvtRb             *ebpf.Map `ebpf:"conn_evt_rb"`
 	ConnInfoMap           *ebpf.Map `ebpf:"conn_info_map"`
 	ControlValues         *ebpf.Map `ebpf:"control_values"`
+	FilterCgroupMap       *ebpf.Map `ebpf:"filter_cgroup_map"`
 	FilterMntnsMap        *ebpf.Map `ebpf:"filter_mntns_map"`
 	FilterNetnsMap        *ebpf.Map `ebpf:"filter_netns_map"`
 	FilterPidMap          *ebpf.Map `ebpf:"filter_pid_map"`
@@ -138,6 +162,7 @@ func (m *Openssl102aMaps) Close() error {
 		m.ConnEvtRb,
 		m.ConnInfoMap,
 		m.ControlValues,
+		m.FilterCgroupMap,
 		m.FilterMntnsMap,
 		m.FilterNetnsMap,
 		m.FilterPidMap,
@@ -151,6 +176,26 @@ func (m *Openssl102aMaps) Close() error {
 		m.SyscallDataMap,
 		m.SyscallRb,
 	)
+}
+
+// Openssl102aVariables contains all global variables after they have been loaded into the kernel.
+//
+// It can be passed to LoadOpenssl102aObjects or ebpf.CollectionSpec.LoadAndAssign.
+type Openssl102aVariables struct {
+	ConnEvtT_unused           *ebpf.Variable `ebpf:"conn_evt_t_unused"`
+	ConnIdS_tUnused           *ebpf.Variable `ebpf:"conn_id_s_t_unused"`
+	ConnInfoT_unused          *ebpf.Variable `ebpf:"conn_info_t_unused"`
+	ConnTypeT_unused          *ebpf.Variable `ebpf:"conn_type_t_unused"`
+	ControlValueIndexT_unused *ebpf.Variable `ebpf:"control_value_index_t_unused"`
+	EndpointRoleUnused        *ebpf.Variable `ebpf:"endpoint_role_unused"`
+	KInvalidFD                *ebpf.Variable `ebpf:"kInvalidFD"`
+	KernEvtDataUnused         *ebpf.Variable `ebpf:"kern_evt_data_unused"`
+	KernEvtSslDataUnused      *ebpf.Variable `ebpf:"kern_evt_ssl_data_unused"`
+	KernEvtUnused             *ebpf.Variable `ebpf:"kern_evt_unused"`
+	SockKeyUnused             *ebpf.Variable `ebpf:"sock_key_unused"`
+	StepT_unused              *ebpf.Variable `ebpf:"step_t_unused"`
+	TrafficDirectionT_unused  *ebpf.Variable `ebpf:"traffic_direction_t_unused"`
+	TrafficProtocolT_unused   *ebpf.Variable `ebpf:"traffic_protocol_t_unused"`
 }
 
 // Openssl102aPrograms contains all programs after they have been loaded into the kernel.

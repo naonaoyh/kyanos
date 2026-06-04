@@ -577,3 +577,53 @@ GOOS=linux go test -c ./agent/controlplane/    # ✅ compiles
 | RTCM payload 偏移 | RawBytes 含 3 字节 header, payload 从 [3:] 开始 | 位解析时 offset 要加上 24 (header bits) |
 | GPS 闰秒变化 | 当前 LeapSecondsGPSUTC=18, 未来可能更新 | 需要时可配置化 |
 | 插入排序性能 | sortDurations 用插入排序, n>1000 时慢 | 可换 sort.Slice |
+
+---
+
+## 16. NTRIP/RTCM 协议捕获深度排障与修复进度 (2026-06-05)
+
+### 16.1 排障发现与核心原因
+1. **WSL2 LSM 限制**：WSL2 中不触发 `security_socket_sendmsg`/`recvmsg` 安全钩子，导致 `args->sock_event` 恒为 `false`。BPF 层的 `sys_exit_read/write` 钩子由于该过滤将所有流量丢弃。
+2. **协议推断与过滤器过滤**：当连接建立后，如果首次捕获的数据是 raw RTCM 帧（以 `0xD3` 开头），在 `kyanos watch ntrip` 过滤下（只开启 `kProtocolNTRIP` 与 `kProtocolHTTP` 推断，排除了 `kProtocolRTCM`），会导致连接被推断为 `kProtocolUnknown`。一旦判定为 Unknown，该连接后续所有读写包在 BPF 层均会被直接丢弃。
+
+### 16.2 已实施的代码修改
+1. **优化 BPF 调试打印 (`protocol_inference.h`)**：优化了 `is_http_protocol` 与 `is_ntrip_protocol` 的 `bpf_printk`，将参数限制在 3 个以内，改用十六进制打印读取的前 4 字节，防止 WSL2 环境下 verifier/printk 截断出现 `buf=?` 的现象。同时为 `is_rtcm_protocol` 也添加了十六进制打印。
+2. **打通 RTCM 协议推断通路 (`protocol_inference.h`)**：修改了 `TRACE_PROTOCOL` 宏，当 `trace_protocol` 为 `kProtocolNTRIP` 时，同时激活对 `kProtocolHTTP` 与 `kProtocolRTCM` 协议的推断，防止其沦为 Unknown。
+3. **优化系统调用数据路径调试 (`pktlatency.bpf.c`)**：在 `process_syscall_data` 与 `process_syscall_data_vecs` 入口处（需匹配 `match_trace_tgid`）引入 `bpf_printk`，打印每次系统调用出口的 `tgid`、`fd`、`direction`、`bytes_count` 和 `conn_info` 指针，用以精准追踪数据包的去向与生命周期。
+4. **Go 用户态适配支持 (`agent/protocol/ntrip/filter.go`)**：更新了 `NTRIPFilter.FilterByProtocol`，使其在接收到 `TKProtocolRTCM` 的包时也返回 `true`，确保即使被推断为 RTCM 协议的连接也能在 NTRIP 解析器中正常解码与诊断。
+
+### 16.3 编译与测试建议 (下一步动作)
+1. **编译环境**：在 WSL2 环境下直接运行 `make` 可能会由于 root 用户的默认 PATH 没有包含 Go 路径（位于 `/usr/local/go/bin`）而报错 `go: not found` 错误。编译前需运行：
+   ```bash
+   export PATH="/usr/local/go/bin:$PATH"
+   make clean && make build-bpf && make
+   ```
+2. **实测运行**：重新编译生成最新 `kyanos` 后，在项目根目录下运行：
+   ```bash
+   ./test_ntrip_capture.sh
+   ```
+   验证 Auth/NTRIP request、GGA sentence、RTCM 捕获数均大于 0。
+3. **日志观测**：使用 `wsl -d Ubuntu-26.04 -u root tail -f /sys/kernel/tracing/trace` 可以实时查看 eBPF 打印的十六进制底层读写流。
+
+---
+
+## 17. NTRIP 协议判定最终化、角色标记与单向直发性能优化 (2026-06-05)
+
+为了完善对复杂混合协议 NTRIP 的支持并消除性能瓶颈，实施了以下升级：
+
+### 17.1 HTTP 协议判定防倒退与最终化
+- **防倒退规则**：一旦 Go 用户态 `Connection4` 连接被升级判定为 `NTRIP`，直接忽略后续任何来自内核的 `HTTP` 等协议降级通知，避免判定状态退化。
+- **最终化 HTTP 拦截**：在连接初期，若检测到 `POST`、`PUT`、`OPTIONS`、`DELETE`、`PATCH`、`HEAD` 等非标准 NTRIP HTTP 原语，则将 `httpFinalized` 置为 `true`。在此之后，该连接被永久性“封锁”，后续绝对不能被改判或升级为 `NTRIP`。
+- **动态内容判定升级**：若连接目前处于 `HTTP` 或 `Unset` 状态且未最终化，一旦接收到 `$GPGGA` 语句、`0xD3` 格式 RTCM 帧头或 `ICY` 回复前缀，立刻在 Go 态将其协议类型升级为 `NTRIP`。
+
+### 17.2 Caster/Source/Rover 三角色标记与支持
+- **角色映射字段**：在 `NTRIPSession` 结构体及 `Connection4` 中引入 `ClientRole` ("Rover" | "Source") 和 `ServerRole` ("Caster") 的识别存储。
+- **动态方法识别**：在会话管理器 `tracker.go` 中，根据 `NTRIPRequest.Method`（`GET` 映射为 `Rover`；`SOURCE`/`POST` 映射为 `Source`）动态识别并记录连接扮演的角色。
+- **报告输出与 JSONL 导出**：
+  - 更新了 `report.go`，在会话诊断报告的身份区打印 `Client Role` 与 `Server Role`。
+  - 更新了 `jsonl.go`，在 `SessionSummaryJSON` 中添加了 `client_role` 和 `server_role` 字段以支持机器消费。
+
+### 17.3 单向流高吞吐“直发”性能优化（GGA / RTCM 帧）
+- **单向记录判定修复**：修改了 `protocol.go` 中的 `IsUnidirectional()` 为 `r.Req == nil || r.Resp == nil`，确保只有一侧的 RTCM (Req=nil) 或 GGA (Resp=nil) 可以被正确判定为单向包。
+- **绕过排序缓存直发**：在 `RecordsProcessor.Run` 消费逻辑中，若记录被判定为单向，**直接调用 `submitRecord` 派发输出，彻底绕过 1000ms 缓存与排序队列**。这在保障 RTCM 推送实时性的同时，完全消除了高吞吐量数据流下的 CPU 排序消耗与内存积压。
+- **实测结果**：运行 `./test_ntrip_capture.sh` 集成测试，NTRIP 捕获指标正常，且单向 RTCM 和 GGA 的打印相较于 HTTP 握手记录提前了整整 1 秒，完美展现了直发优化成果。

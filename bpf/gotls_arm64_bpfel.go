@@ -83,9 +83,10 @@ func LoadGoTlsObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
 type GoTlsSpecs struct {
 	GoTlsProgramSpecs
 	GoTlsMapSpecs
+	GoTlsVariableSpecs
 }
 
-// GoTlsSpecs contains programs before they are loaded into the kernel.
+// GoTlsProgramSpecs contains programs before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type GoTlsProgramSpecs struct {
@@ -106,6 +107,7 @@ type GoTlsMapSpecs struct {
 	ConnEvtRb             *ebpf.MapSpec `ebpf:"conn_evt_rb"`
 	ConnInfoMap           *ebpf.MapSpec `ebpf:"conn_info_map"`
 	ControlValues         *ebpf.MapSpec `ebpf:"control_values"`
+	FilterCgroupMap       *ebpf.MapSpec `ebpf:"filter_cgroup_map"`
 	FilterMntnsMap        *ebpf.MapSpec `ebpf:"filter_mntns_map"`
 	FilterNetnsMap        *ebpf.MapSpec `ebpf:"filter_netns_map"`
 	FilterPidMap          *ebpf.MapSpec `ebpf:"filter_pid_map"`
@@ -124,12 +126,25 @@ type GoTlsMapSpecs struct {
 	SyscallRb             *ebpf.MapSpec `ebpf:"syscall_rb"`
 }
 
+// GoTlsVariableSpecs contains global variables before they are loaded into the kernel.
+//
+// It can be passed ebpf.CollectionSpec.Assign.
+type GoTlsVariableSpecs struct {
+	GoCommonSymaddrsT_unused *ebpf.VariableSpec `ebpf:"go_common_symaddrs_t_unused"`
+	GoTlsSymaddrsT_unused    *ebpf.VariableSpec `ebpf:"go_tls_symaddrs_t_unused"`
+	KInvalidFD               *ebpf.VariableSpec `ebpf:"kInvalidFD"`
+	KernEvtSslDataUnused     *ebpf.VariableSpec `ebpf:"kern_evt_ssl_data_unused"`
+	LocationT_unused         *ebpf.VariableSpec `ebpf:"location_t_unused"`
+	LocationTypeT_unused     *ebpf.VariableSpec `ebpf:"location_type_t_unused"`
+}
+
 // GoTlsObjects contains all objects after they have been loaded into the kernel.
 //
 // It can be passed to LoadGoTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type GoTlsObjects struct {
 	GoTlsPrograms
 	GoTlsMaps
+	GoTlsVariables
 }
 
 func (o *GoTlsObjects) Close() error {
@@ -150,6 +165,7 @@ type GoTlsMaps struct {
 	ConnEvtRb             *ebpf.Map `ebpf:"conn_evt_rb"`
 	ConnInfoMap           *ebpf.Map `ebpf:"conn_info_map"`
 	ControlValues         *ebpf.Map `ebpf:"control_values"`
+	FilterCgroupMap       *ebpf.Map `ebpf:"filter_cgroup_map"`
 	FilterMntnsMap        *ebpf.Map `ebpf:"filter_mntns_map"`
 	FilterNetnsMap        *ebpf.Map `ebpf:"filter_netns_map"`
 	FilterPidMap          *ebpf.Map `ebpf:"filter_pid_map"`
@@ -177,6 +193,7 @@ func (m *GoTlsMaps) Close() error {
 		m.ConnEvtRb,
 		m.ConnInfoMap,
 		m.ControlValues,
+		m.FilterCgroupMap,
 		m.FilterMntnsMap,
 		m.FilterNetnsMap,
 		m.FilterPidMap,
@@ -194,6 +211,18 @@ func (m *GoTlsMaps) Close() error {
 		m.SyscallDataMap,
 		m.SyscallRb,
 	)
+}
+
+// GoTlsVariables contains all global variables after they have been loaded into the kernel.
+//
+// It can be passed to LoadGoTlsObjects or ebpf.CollectionSpec.LoadAndAssign.
+type GoTlsVariables struct {
+	GoCommonSymaddrsT_unused *ebpf.Variable `ebpf:"go_common_symaddrs_t_unused"`
+	GoTlsSymaddrsT_unused    *ebpf.Variable `ebpf:"go_tls_symaddrs_t_unused"`
+	KInvalidFD               *ebpf.Variable `ebpf:"kInvalidFD"`
+	KernEvtSslDataUnused     *ebpf.Variable `ebpf:"kern_evt_ssl_data_unused"`
+	LocationT_unused         *ebpf.Variable `ebpf:"location_t_unused"`
+	LocationTypeT_unused     *ebpf.Variable `ebpf:"location_type_t_unused"`
 }
 
 // GoTlsPrograms contains all programs after they have been loaded into the kernel.

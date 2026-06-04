@@ -48,7 +48,7 @@ func (r *Record) Response() ParsedMessage {
 // frames carried inside an NTRIP data stream, where each frame is modelled as
 // a request with no response.
 func (r *Record) IsUnidirectional() bool {
-	return r.Resp == nil
+	return r.Req == nil || r.Resp == nil
 }
 
 // EffectiveResponse returns the response message, or the request message when
@@ -70,10 +70,10 @@ type RecordToStringOptions struct {
 
 func (r *Record) String(opt RecordToStringOptions) string {
 	var result string
-	if opt.IncludeReqBody {
+	if opt.IncludeReqBody && r.Req != nil {
 		result += fmt.Sprintf("[ Request ]\n%s\n\n", common.TruncateString(r.Req.FormatToString(), opt.RecordMaxDumpBytes))
 	}
-	if opt.IncludeRespBody {
+	if opt.IncludeRespBody && r.Resp != nil {
 		result += fmt.Sprintf("[ Response ]\n%s\n\n", common.TruncateString(r.Resp.FormatToString(), opt.RecordMaxDumpBytes))
 	}
 	return result

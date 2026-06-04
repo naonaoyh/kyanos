@@ -68,7 +68,7 @@ func makeTestSession() *SessionRecord {
 func TestReportFormatJSON(t *testing.T) {
 	r := NewDiagnosticReporter()
 	s := makeTestSession()
-	report := r.FormatJSON(s)
+	report := r.FormatJSON(s, nil)
 
 	if report.SessionID != "sess-test-001" {
 		t.Errorf("session_id = %q", report.SessionID)
@@ -101,7 +101,7 @@ func TestReportFormatJSONDegraded(t *testing.T) {
 	s.RTCMCRCErrors = 100
 	s.RTCMCRCErrorRate = 0.05
 	s.RTCMInterruptions = 5
-	report := r.FormatJSON(s)
+	report := r.FormatJSON(s, nil)
 
 	if report.Verdict != "DEGRADED" {
 		t.Errorf("verdict = %q, want DEGRADED", report.Verdict)
@@ -120,7 +120,7 @@ func TestReportFormatJSONCritical(t *testing.T) {
 	s.Score = 20
 	s.LoginScore = 0
 	s.AuthSuccess = false
-	report := r.FormatJSON(s)
+	report := r.FormatJSON(s, nil)
 
 	if report.Verdict != "CRITICAL" {
 		t.Errorf("verdict = %q, want CRITICAL", report.Verdict)
@@ -130,7 +130,7 @@ func TestReportFormatJSONCritical(t *testing.T) {
 func TestReportFormatHTML(t *testing.T) {
 	r := NewDiagnosticReporter()
 	s := makeTestSession()
-	html := r.FormatHTML(s)
+	html := r.FormatHTML(s, nil)
 
 	if !strings.Contains(html, "sess-test-001") {
 		t.Error("HTML missing session ID")
@@ -155,7 +155,7 @@ func TestReportFormatHTMLWithIssues(t *testing.T) {
 	s.Issues = []SessionIssue{
 		{Category: "rtcm", Severity: "warning", Description: "CRC errors above threshold"},
 	}
-	html := r.FormatHTML(s)
+	html := r.FormatHTML(s, nil)
 
 	if !strings.Contains(html, "CRC errors above threshold") {
 		t.Error("HTML missing issue description")
@@ -199,6 +199,119 @@ func TestDimensionStatus(t *testing.T) {
 		got := dimensionStatus(tt.score)
 		if got != tt.want {
 			t.Errorf("dimensionStatus(%d) = %q, want %q", tt.score, got, tt.want)
+		}
+	}
+}
+
+func TestReport_GlobalCorrelation(t *testing.T) {
+	r := NewDiagnosticReporter()
+	store := NewMemoryStore()
+
+	// 1. Create a previous closed session
+	prevTime := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	prev := &SessionRecord{
+		SessionID:       "prev-session",
+		TaskID:          "task-123",
+		Username:        "testuser",
+		ClientIP:        "10.0.0.1",
+		ServerPod:       "pod-1",
+		NodeName:        "node-1",
+		StartTime:       prevTime,
+		CloseTime:       prevTime.Add(30 * time.Minute), // Ends at 12:30
+		Closed:          true,
+		StabilityScore: 100,
+	}
+	store.SaveSession(prev)
+
+	// 2. Create a new session (starts 10 seconds later, same IP, same node -> no drift)
+	curr1 := &SessionRecord{
+		SessionID:       "curr-session-1",
+		TaskID:          "task-123",
+		Username:        "testuser",
+		ClientIP:        "10.0.0.1",
+		ServerPod:       "pod-1",
+		NodeName:        "node-1",
+		StartTime:       prev.CloseTime.Add(10 * time.Second), // Starts at 12:30:10
+		Closed:          false,
+		StabilityScore: 100,
+	}
+	report1 := r.FormatJSON(curr1, store)
+	
+	// Verify reconnection is detected
+	stabDim1 := report1.Dimensions[4] // Index 4 is stability dimension
+	hasReconn := false
+	for _, f := range stabDim1.Findings {
+		if strings.Contains(f, "Global Client Reconnection") {
+			hasReconn = true
+		}
+	}
+	if !hasReconn {
+		t.Error("expected global client reconnection finding")
+	}
+	if stabDim1.Score != 100 {
+		t.Errorf("stability score = %d, want 100", stabDim1.Score)
+	}
+	if len(report1.Issues) != 0 {
+		t.Errorf("len(issues) = %d, want 0", len(report1.Issues))
+	}
+
+	// 3. Create a new session (starts 20 seconds later, different IP, different server -> drift!)
+	curr2 := &SessionRecord{
+		SessionID:       "curr-session-2",
+		TaskID:          "task-123",
+		Username:        "testuser",
+		ClientIP:        "10.0.0.2", // IP changed!
+		ServerPod:       "pod-2",   // Pod changed!
+		NodeName:        "node-2",   // Node changed!
+		StartTime:       prev.CloseTime.Add(20 * time.Second),
+		Closed:          false,
+		StabilityScore: 100,
+	}
+	report2 := r.FormatJSON(curr2, store)
+
+	stabDim2 := report2.Dimensions[4]
+	hasReconn = false
+	hasIPChange := false
+	hasMigrate := false
+	for _, f := range stabDim2.Findings {
+		if strings.Contains(f, "Global Client Reconnection") {
+			hasReconn = true
+		}
+		if strings.Contains(f, "Connection Migration") {
+			hasIPChange = true
+		}
+		if strings.Contains(f, "Cross-Server Migration") {
+			hasMigrate = true
+		}
+	}
+	if !hasReconn {
+		t.Error("expected global client reconnection finding")
+	}
+	if !hasIPChange {
+		t.Error("expected connection migration finding")
+	}
+	if !hasMigrate {
+		t.Error("expected cross-server migration finding")
+	}
+	
+	// Check score deduction: StabilityScore was 100, should be 90 now
+	if stabDim2.Score != 90 {
+		t.Errorf("stability score = %d, want 90", stabDim2.Score)
+	}
+
+	// Check issue is appended
+	if len(report2.Issues) != 1 {
+		t.Errorf("len(issues) = %d, want 1", len(report2.Issues))
+	} else {
+		issue := report2.Issues[0]
+		if issue.Category != "STABILITY" {
+			t.Errorf("issue category = %q, want STABILITY", issue.Category)
+		}
+		if issue.Severity != "warn" {
+			t.Errorf("issue severity = %q, want warn", issue.Severity)
+		}
+		if !strings.Contains(issue.Description, "Client migrated across nodes/pods") {
+			t.Errorf("issue description = %q, expected migration info", issue.Description)
 		}
 	}
 }

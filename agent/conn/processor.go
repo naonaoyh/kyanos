@@ -216,7 +216,14 @@ func (p *Processor) run() {
 				conn = p.connManager.LookupConnection4ByTimestamp(TgidFd, event.Ts+common.LaunchEpochTime)
 				// previousProtocol := conn.Protocol
 				if conn != nil && conn.Status != Closed {
-					conn.Protocol = event.ConnInfo.Protocol
+					newProto := event.ConnInfo.Protocol
+					if conn.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP {
+						// 约束 1: 不允许从 NTRIP 又再识别为 HTTP/RTCM（防倒退）
+					} else if conn.httpFinalized && newProto == bpf.AgentTrafficProtocolTKProtocolNTRIP {
+						// 约束 1: HTTP 判定已最终化，忽略改判为 NTRIP
+					} else {
+						conn.Protocol = newProto
+					}
 					common.ConntrackLog.Debugf("[protocol-infer][%s] protocol updated: %d", conn.ToString(), conn.Protocol)
 				} else {
 					if conn == nil {
@@ -239,6 +246,7 @@ func (p *Processor) run() {
 
 				isProtocolInterested := conn.Protocol == bpf.AgentTrafficProtocolTKProtocolUnset ||
 					conn.MessageFilter.FilterByProtocol(conn.Protocol)
+				common.ConntrackLog.Debugf("[PROCESSOR_DEBUG] conn=%s protocol=%d filter_type=%T filter_interested=%v", conn.ToString(), conn.Protocol, conn.MessageFilter, conn.MessageFilter.FilterByProtocol(conn.Protocol))
 
 				if isProtocolInterested && !isSideNotMatched(p, conn) {
 					if conn.Protocol != bpf.AgentTrafficProtocolTKProtocolUnknown {

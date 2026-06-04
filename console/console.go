@@ -27,6 +27,14 @@ type Config struct {
 	// (e.g., ":8080").
 	HTTPListenAddr string
 
+	// StorageDir is the path to the directory where Console stores its persistent data.
+	// If empty, MemoryStore is used (in-memory only).
+	StorageDir string
+
+	// StorageRetentionDays determines how long data should be kept in days.
+	// Set to 0 to disable automated deletion.
+	StorageRetentionDays int
+
 	// Logger is an optional logger; if nil, the standard log package is used.
 	Logger *log.Logger
 }
@@ -59,7 +67,19 @@ func New(cfg Config) *Console {
 		cfg.Logger = log.Default()
 	}
 
-	store := NewMemoryStore()
+	var store SessionStore
+	if cfg.StorageDir != "" {
+		var err error
+		store, err = NewFileStore(cfg.StorageDir)
+		if err != nil {
+			cfg.Logger.Fatalf("console: failed to initialize filestore: %v", err)
+		}
+		cfg.Logger.Printf("console: using persistent FileStore at %s", cfg.StorageDir)
+	} else {
+		store = NewMemoryStore()
+		cfg.Logger.Printf("console: using transient MemoryStore")
+	}
+
 	hub := NewWSHub()
 	reporter := NewDiagnosticReporter()
 	handler := NewAgentServiceHandler(store, hub)
@@ -96,6 +116,16 @@ func (c *Console) GRPCHandler() *AgentServiceHandler { return c.handler }
 // the context is cancelled, then performs a graceful shutdown.
 func (c *Console) Start(ctx context.Context) error {
 	errCh := make(chan error, 2)
+
+	// Start automatic cleanup loop if configured.
+	if c.cfg.StorageRetentionDays > 0 {
+		if cleaner, ok := c.store.(interface {
+			CleanupExpired(before time.Time) (int, error)
+		}); ok {
+			c.logger.Printf("console: starting data retention cleanup loop (retention: %d days)", c.cfg.StorageRetentionDays)
+			go c.runCleanupLoop(ctx, cleaner)
+		}
+	}
 
 	// Start gRPC server.
 	grpcLis, err := net.Listen("tcp", c.cfg.GRPCListenAddr)
@@ -152,4 +182,35 @@ func (c *Console) shutdown() error {
 
 	c.logger.Printf("console: shutdown complete")
 	return nil
+}
+
+func (c *Console) runCleanupLoop(ctx context.Context, cleaner interface {
+	CleanupExpired(before time.Time) (int, error)
+}) {
+	// Run cleanup once on start.
+	c.executeCleanup(cleaner)
+
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.executeCleanup(cleaner)
+		}
+	}
+}
+
+func (c *Console) executeCleanup(cleaner interface {
+	CleanupExpired(before time.Time) (int, error)
+}) {
+	threshold := time.Now().Add(-time.Duration(c.cfg.StorageRetentionDays) * 24 * time.Hour)
+	count, err := cleaner.CleanupExpired(threshold)
+	if err != nil {
+		c.logger.Printf("console: storage cleanup error: %v", err)
+	} else if count > 0 {
+		c.logger.Printf("console: storage cleanup deleted %d expired sessions", count)
+	}
 }

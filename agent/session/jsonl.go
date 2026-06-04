@@ -28,6 +28,8 @@ type SessionSummaryJSON struct {
 	Mount     string `json:"mount,omitempty"`
 	Username  string `json:"username,omitempty"`
 	Version   string `json:"ntrip_version,omitempty"`
+	ClientRole string `json:"client_role,omitempty"`
+	ServerRole string `json:"server_role,omitempty"`
 
 	ClientIP   string `json:"client_ip"`
 	ClientPort uint16 `json:"client_port"`
@@ -110,6 +112,8 @@ func SessionSummaryFromSession(s *NTRIPSession, cfg ReportConfig) SessionSummary
 		Mount:      s.MountPoint,
 		Username:   s.Username,
 		Version:    s.NTRIPVersion,
+		ClientRole: s.ClientRole,
+		ServerRole: s.ServerRole,
 		ClientIP:   s.ClientIP,
 		ClientPort: s.ClientPort,
 		ServerPod:  s.ServerPod,

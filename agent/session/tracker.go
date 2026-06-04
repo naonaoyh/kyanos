@@ -255,21 +255,27 @@ func (t *SessionTracker) detectKickOut(closing *NTRIPSession, closeTime time.Tim
 	defer t.mu.RUnlock()
 
 	for _, s := range t.sessions {
+		s.mu.RLock()
+		sUser := s.Username
+		sStartTime := s.ConnStartTime
+		s.mu.RUnlock()
+		sActive := s.IsActive()
+
 		if s == closing {
 			continue
 		}
-		if s.Username != username {
+		if sUser != username {
 			continue
 		}
 		// Another session with the same username exists.
 		// If it started shortly before this one closed → kick-out.
-		gap := closeTime.Sub(s.ConnStartTime)
+		gap := closeTime.Sub(sStartTime)
 		if gap >= -t.config.KickOutWindow && gap <= t.config.KickOutWindow {
 			return true
 		}
 		// Also: if this session started while the closing one was still active
-		if s.IsActive() && s.ConnStartTime.After(closing.ConnStartTime) {
-			timeDiff := s.ConnStartTime.Sub(closing.ConnStartTime)
+		if sActive && sStartTime.After(closing.ConnStartTime) {
+			timeDiff := sStartTime.Sub(closing.ConnStartTime)
 			if timeDiff <= t.config.KickOutWindow {
 				return true
 			}
@@ -340,6 +346,15 @@ func (t *SessionTracker) handleNTRIPRequest(req *ntrip.NTRIPRequest, resp protoc
 	s := t.getOrCreateSession(clientIP, clientPort, mountPoint, req.Username, conn.ServerIP(), reqTime)
 
 	s.mu.Lock()
+
+	// 识别并标记 NTRIP 会话中各端角色身份
+	if req.Method == ntrip.MethodSource || req.Method == ntrip.MethodPost {
+		s.ClientRole = "Source"
+		s.ServerRole = "Caster"
+	} else if req.Method == ntrip.MethodGet {
+		s.ClientRole = "Rover"
+		s.ServerRole = "Caster"
+	}
 
 	// Track last activity
 	s.LastActivityTime = reqTime
@@ -715,3 +730,17 @@ func authMethodString(req *ntrip.NTRIPRequest) string {
 	}
 	return "none"
 }
+
+// FindActiveSession searches for an active session matching the given client IP and port.
+// It is safe for concurrent use.
+func (t *SessionTracker) FindActiveSession(clientIP string, clientPort uint16) (*NTRIPSession, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, s := range t.sessions {
+		if s.ClientIP == clientIP && s.ClientPort == clientPort && s.IsActive() {
+			return s, true
+		}
+	}
+	return nil, false
+}
+

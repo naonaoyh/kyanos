@@ -9,12 +9,16 @@
 package controlplane
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"time"
 
+	"kyanos/agent/export"
 	"kyanos/agent/session"
+	"kyanos/common"
 	"kyanos/proto/agentpb"
 )
 
@@ -33,11 +37,15 @@ type activeTask struct {
 	// Export options for this task's output.
 	Export *agentpb.ExportOptions
 
+	// Export handles
+	PcapNgExp *export.PcapNgWriter
+
 	// Duration management.
 	DurationSeconds int64
 	StartTime       time.Time
 	Timer           Timer // nil when no duration is set; stops the task on fire
 }
+
 
 // TaskManager tracks active CaptureTask instances by task_id. It validates
 // incoming tasks, arms injectable-clock duration timers that auto-stop tasks,
@@ -45,9 +53,10 @@ type activeTask struct {
 //
 // All methods are safe for concurrent use.
 type TaskManager struct {
-	mu    sync.Mutex
-	clock Clock
-	tasks map[string]*activeTask
+	mu           sync.Mutex
+	clock        Clock
+	tasks        map[string]*activeTask
+	ipToNameFunc func() map[string]string
 }
 
 // NewTaskManager creates a TaskManager that uses the given clock for duration
@@ -61,6 +70,45 @@ func NewTaskManager(clock Clock) *TaskManager {
 		tasks: make(map[string]*activeTask),
 	}
 }
+
+// SetIPToNameFunc registers a callback to resolve Pod IP to Pod Name.
+func (m *TaskManager) SetIPToNameFunc(fn func() map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ipToNameFunc = fn
+}
+
+// handleUploadAndCleanup is triggered asynchronously when a file part is closed.
+// If a cosBucket is configured, it uploads the file and deletes the local copy.
+func (m *TaskManager) handleUploadAndCleanup(taskID, localPath, cosBucket string) {
+	if cosBucket == "" {
+		return
+	}
+	region := os.Getenv("COS_REGION")
+	if region == "" {
+		region = "ap-guangzhou"
+	}
+
+	uploader, err := export.NewCOSUploader(export.COSUploaderConfig{
+		Bucket:    cosBucket,
+		Region:    region,
+		Prefix:    "captures/" + taskID,
+		DeleteRaw: true,
+	})
+	if err != nil {
+		common.AgentLog.Errorf("TaskManager: failed to create COSUploader for task %q: %v", taskID, err)
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if _, err := uploader.Upload(ctx, localPath); err != nil {
+			common.AgentLog.Errorf("TaskManager: failed to upload %q to COS for task %q: %v", localPath, taskID, err)
+		}
+	}()
+}
+
 
 // Start validates the given CaptureTask and, if valid, records it as active with
 // its scope, filter handles, and export options. It returns an accepting
@@ -88,11 +136,54 @@ func (m *TaskManager) Start(task *agentpb.CaptureTask) *agentpb.TaskResponse {
 		return rejectResponse(taskID, "task has no targeting scope: at least one of target_pod, target_namespace, or pod_labels must be specified")
 	}
 
+	// Initialize PCAP-NG exporter pre-lock to avoid holding lock during File I/O
+	var pcapNgExp *export.PcapNgWriter
+	if task.GetExport().GetExportPcap() {
+		basePath := fmt.Sprintf("./captures/task-%s.pcapng", taskID)
+		var ipMap map[string]string
+		if m.ipToNameFunc != nil {
+			ipMap = m.ipToNameFunc()
+		}
+
+		rotator, err := export.NewRotateWriter(export.RotateWriterConfig{
+			BasePath: basePath,
+			MaxSize:  100 * 1024 * 1024, // 100MB
+			MaxDuration: 1 * time.Hour,
+			HeaderGenerator: func() []byte {
+				m.mu.Lock()
+				fn := m.ipToNameFunc
+				m.mu.Unlock()
+				var currentIpMap map[string]string
+				if fn != nil {
+					currentIpMap = fn()
+				}
+				return export.GetGlobalHeaderBytes(currentIpMap)
+			},
+			OnRotate: func(closedPath string) {
+				m.handleUploadAndCleanup(taskID, closedPath, task.GetExport().GetCosBucket())
+			},
+		})
+		if err != nil {
+			return rejectResponse(taskID, fmt.Sprintf("failed to initialize PCAP-NG exporter: %v", err))
+		}
+
+		writer, err := export.NewPcapNgWriter(rotator, ipMap)
+		if err != nil {
+			rotator.Close()
+			return rejectResponse(taskID, fmt.Sprintf("failed to initialize PCAP-NG writer: %v", err))
+		}
+		pcapNgExp = writer
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Validate: task_id must not already be active.
 	if _, exists := m.tasks[taskID]; exists {
+		if pcapNgExp != nil {
+			pcapNgExp.Close()
+			os.Remove(fmt.Sprintf("./captures/task-%s.pcapng", taskID))
+		}
 		return rejectResponse(taskID, fmt.Sprintf("task_id %q is already active", taskID))
 	}
 
@@ -104,6 +195,7 @@ func (m *TaskManager) Start(task *agentpb.CaptureTask) *agentpb.TaskResponse {
 		NtripFilter:     task.GetNtripFilter(),
 		RtcmFilter:      task.GetRtcmFilter(),
 		Export:          task.GetExport(),
+		PcapNgExp:       pcapNgExp,
 		DurationSeconds: task.GetDurationSeconds(),
 		StartTime:       m.clock.Now(),
 	}
@@ -120,6 +212,7 @@ func (m *TaskManager) Start(task *agentpb.CaptureTask) *agentpb.TaskResponse {
 
 	return acceptResponse(taskID)
 }
+
 
 // Stop deactivates an active task and returns a STOPPED TaskResponse. If the
 // task_id is not active, it returns a NOT_FOUND response.
@@ -226,6 +319,13 @@ func (m *TaskManager) stopLocked(taskID string) *agentpb.TaskResponse {
 		at.Timer.Stop()
 	}
 
+	// Close PCAP-NG exporter if active
+	if at.PcapNgExp != nil {
+		if err := at.PcapNgExp.Close(); err != nil {
+			common.AgentLog.Errorf("TaskManager: failed to close PCAP-NG exporter for task %q: %v", taskID, err)
+		}
+	}
+
 	delete(m.tasks, taskID)
 
 	return stoppedResponse(taskID)
@@ -320,4 +420,27 @@ func notFoundResponse(taskID string) *agentpb.TaskResponse {
 		Reason: fmt.Sprintf("task_id %q is not active", taskID),
 		Status: agentpb.Status_NOT_FOUND,
 	}
+}
+
+// GetPcapNgExpForConn returns the PcapNgExp and task ID for the active task matching the connection.
+// If no active task matches, it returns (nil, "", false).
+func (m *TaskManager) GetPcapNgExpForConn(s *session.NTRIPSession) (*export.PcapNgWriter, string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var bestTask *activeTask
+	bestScore := -1
+
+	for _, at := range m.tasks {
+		score := matchScore(at, s)
+		if score >= 0 && score > bestScore {
+			bestScore = score
+			bestTask = at
+		}
+	}
+
+	if bestScore < 0 || bestTask == nil {
+		return nil, "", false
+	}
+	return bestTask.PcapNgExp, bestTask.TaskID, true
 }

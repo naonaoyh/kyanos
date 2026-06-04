@@ -20,6 +20,9 @@ type SessionStore interface {
 	// SaveSession upserts a session record (e.g., on session close with summary).
 	SaveSession(rec *SessionRecord)
 
+	// DeleteSession removes a session and its associated events.
+	DeleteSession(id string) error
+
 	// GetSession returns a single session by ID, or nil if not found.
 	GetSession(id string) *SessionRecord
 
@@ -99,6 +102,14 @@ func (m *MemoryStore) SaveSession(rec *SessionRecord) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions[rec.SessionID] = rec
+}
+
+func (m *MemoryStore) DeleteSession(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.sessions, id)
+	delete(m.events, id)
+	return nil
 }
 
 func (m *MemoryStore) GetSession(id string) *SessionRecord {

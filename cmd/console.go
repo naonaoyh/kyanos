@@ -18,6 +18,8 @@ import (
 func init() {
 	consoleCmd.Flags().String("grpc-addr", ":50051", "gRPC server listen address")
 	consoleCmd.Flags().String("http-addr", ":8080", "HTTP/REST server listen address")
+	consoleCmd.Flags().String("storage-dir", "", "Directory for persistent storage (empty defaults to memory-only)")
+	consoleCmd.Flags().Int("storage-retention", 7, "Storage data retention in days (set 0 to disable automated deletion)")
 	rootCmd.AddCommand(consoleCmd)
 }
 
@@ -31,10 +33,14 @@ var consoleCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		grpcAddr, _ := cmd.Flags().GetString("grpc-addr")
 		httpAddr, _ := cmd.Flags().GetString("http-addr")
+		storageDir, _ := cmd.Flags().GetString("storage-dir")
+		storageRetention, _ := cmd.Flags().GetInt("storage-retention")
 
 		cfg := console.Config{
-			GRPCListenAddr: grpcAddr,
-			HTTPListenAddr: httpAddr,
+			GRPCListenAddr:       grpcAddr,
+			HTTPListenAddr:       httpAddr,
+			StorageDir:           storageDir,
+			StorageRetentionDays: storageRetention,
 		}
 
 		c := console.New(cfg)

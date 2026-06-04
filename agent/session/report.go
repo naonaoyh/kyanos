@@ -68,6 +68,8 @@ func FormatSessionReport(s *NTRIPSession, cfg ReportConfig) string {
 	disconnectDetail := s.DisconnectDetail
 	rtcm := s.RTCMStats
 	nq := s.NetworkQuality
+	clientRole := s.ClientRole
+	serverRole := s.ServerRole
 	s.mu.RUnlock()
 
 	var b strings.Builder
@@ -80,6 +82,12 @@ func FormatSessionReport(s *NTRIPSession, cfg ReportConfig) string {
 	writeLine("========== NTRIP Session Diagnostic Report ==========")
 	writeLine("Session:    %s", sessionID)
 	writeLine("Client:     %s:%d", clientIP, clientPort)
+	if clientRole != "" {
+		writeLine("Client Role: %s", clientRole)
+	}
+	if serverRole != "" {
+		writeLine("Server Role: %s", serverRole)
+	}
 	if serverPod != "" {
 		writeLine("Server Pod: %s", serverPod)
 	} else if serverIP != "" {

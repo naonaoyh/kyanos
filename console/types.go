@@ -63,6 +63,17 @@ func (s TaskStatus) String() string {
 	}
 }
 
+// NtripFilterView is the serializable view of NTRIP filter config.
+type NtripFilterView struct {
+	Mountpoints []string `json:"mountpoints,omitempty"`
+	Usernames   []string `json:"usernames,omitempty"`
+}
+
+// RtcmFilterView is the serializable view of RTCM filter config.
+type RtcmFilterView struct {
+	MessageTypes []int32 `json:"message_types,omitempty"`
+}
+
 // Task represents a capture task dispatched from the Console to an Agent.
 type Task struct {
 	ID              string            `json:"id"`
@@ -79,6 +90,8 @@ type Task struct {
 	ExportPCAP      bool              `json:"export_pcap"`
 	ExportParsed    bool              `json:"export_parsed"`
 	COSBucket       string            `json:"cos_bucket,omitempty"`
+	NtripFilter     *NtripFilterView  `json:"ntrip_filter,omitempty"`
+	RtcmFilter      *RtcmFilterView   `json:"rtcm_filter,omitempty"`
 }
 
 // SessionRecord is the Console's persisted view of a NTRIP session.
@@ -417,4 +430,29 @@ func EventRecordFromProto(e *agentpb.SessionEvent) *SessionEventRecord {
 		rec.EventType = "unknown"
 	}
 	return rec
+}
+
+// AnalyticsSummary represents the aggregated cluster statistics.
+type AnalyticsSummary struct {
+	TotalSessions     int               `json:"total_sessions"`
+	ActiveSessions    int               `json:"active_sessions"`
+	AverageScore      float64           `json:"average_score"`
+	ScoreDistribution map[string]int    `json:"score_distribution"` // "healthy", "degraded", "poor", "critical"
+	TopIssues         []IssueCount      `json:"top_issues"`
+	WorstSessions     []*SessionRecord  `json:"worst_sessions"`
+	AgentStats        []AgentPerfStats  `json:"agent_stats"`
+}
+
+// IssueCount represents the occurrence count of a diagnostic issue category.
+type IssueCount struct {
+	Category string `json:"category"`
+	Count    int    `json:"count"`
+}
+
+// AgentPerfStats holds performance and state stats for an agent.
+type AgentPerfStats struct {
+	NodeName      string `json:"node_name"`
+	Connected     bool   `json:"connected"`
+	ActiveSession int    `json:"active_sessions"`
+	DiscardedEvts uint64 `json:"discarded_events"`
 }

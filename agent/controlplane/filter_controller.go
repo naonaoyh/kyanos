@@ -343,6 +343,8 @@ func compileNTRIPFilter(cfg *agentpb.NTRIPFilterConfig, rtcmCfg *agentpb.RTCMFil
 		f.CRCErrorsOnly = rtcmCfg.GetCrcErrorsOnly()
 	}
 
+	f.InitExtensions()
+
 	return f, nil
 }
 

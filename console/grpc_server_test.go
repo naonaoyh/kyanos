@@ -400,3 +400,169 @@ func TestHandlerSendFilterUpdate(t *testing.T) {
 	stream.cancel()
 	<-done
 }
+
+func TestHandlerStartCapture_NodeAffinityRouting(t *testing.T) {
+	store := NewMemoryStore()
+	hub := NewWSHub()
+	handler := NewAgentServiceHandler(store, hub)
+
+	// Pre-register node-a managing pod-1
+	infoA := &agentpb.AgentInfo{
+		NodeName: "node-a",
+		ManagedPods: []*agentpb.PodInfo{
+			{PodName: "pod-1", Namespace: "default"},
+		},
+	}
+	streamA := newMockConnectStream(infoA)
+	doneA := make(chan error, 1)
+	go func() { doneA <- handler.Connect(infoA, streamA) }()
+
+	// Pre-register node-b managing pod-2
+	infoB := &agentpb.AgentInfo{
+		NodeName: "node-b",
+		ManagedPods: []*agentpb.PodInfo{
+			{PodName: "pod-2", Namespace: "default"},
+		},
+	}
+	streamB := newMockConnectStream(infoB)
+	doneB := make(chan error, 1)
+	go func() { doneB <- handler.Connect(infoB, streamB) }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Dispatch task for pod-2 (which resides on node-b)
+	task := &agentpb.CaptureTask{
+		TaskId:          "task-routed",
+		TargetPod:       "pod-2",
+		TargetNamespace: "default",
+	}
+
+	resp, err := handler.StartCapture(context.Background(), task)
+	if err != nil {
+		t.Fatalf("StartCapture error: %v", err)
+	}
+	if !resp.Accepted {
+		t.Error("expected task accepted")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify node-b received the command
+	streamB.mu.Lock()
+	sentB := len(streamB.sent)
+	streamB.mu.Unlock()
+	if sentB != 1 {
+		t.Errorf("node-b received %d commands, want 1", sentB)
+	}
+
+	// Verify node-a did NOT receive the command
+	streamA.mu.Lock()
+	sentA := len(streamA.sent)
+	streamA.mu.Unlock()
+	if sentA != 0 {
+		t.Errorf("node-a received %d commands, want 0", sentA)
+	}
+
+	// Verify task in store has t.NodeName = node-b
+	gotTask := store.GetTask("task-routed")
+	if gotTask == nil {
+		t.Fatal("expected task in store")
+	}
+	if gotTask.NodeName != "node-b" {
+		t.Errorf("task NodeName = %q, want node-b", gotTask.NodeName)
+	}
+
+	streamA.cancel()
+	streamB.cancel()
+	<-doneA
+	<-doneB
+}
+
+func TestHandlerStartCapture_MultiPodPatternRouting(t *testing.T) {
+	store := NewMemoryStore()
+	hub := NewWSHub()
+	handler := NewAgentServiceHandler(store, hub)
+
+	// node-a manages caster-v1-xxx
+	infoA := &agentpb.AgentInfo{
+		NodeName: "node-a",
+		ManagedPods: []*agentpb.PodInfo{
+			{PodName: "ntrip-caster-v1-abcde", Namespace: "default"},
+			{PodName: "other-pod", Namespace: "default"},
+		},
+	}
+	streamA := newMockConnectStream(infoA)
+	doneA := make(chan error, 1)
+	go func() { doneA <- handler.Connect(infoA, streamA) }()
+
+	// node-b manages caster-v2-yyy
+	infoB := &agentpb.AgentInfo{
+		NodeName: "node-b",
+		ManagedPods: []*agentpb.PodInfo{
+			{PodName: "ntrip-caster-v2-fghij", Namespace: "default"},
+		},
+	}
+	streamB := newMockConnectStream(infoB)
+	doneB := make(chan error, 1)
+	go func() { doneB <- handler.Connect(infoB, streamB) }()
+
+	// node-c manages mysql
+	infoC := &agentpb.AgentInfo{
+		NodeName: "node-c",
+		ManagedPods: []*agentpb.PodInfo{
+			{PodName: "mysql-db-12345", Namespace: "default"},
+		},
+	}
+	streamC := newMockConnectStream(infoC)
+	doneC := make(chan error, 1)
+	go func() { doneC <- handler.Connect(infoC, streamC) }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Dispatch task for v2 caster specifically (ntrip-caster-v2*)
+	task := &agentpb.CaptureTask{
+		TaskId:          "task-canary",
+		TargetPod:       "ntrip-caster-v2*",
+		TargetNamespace: "default",
+	}
+
+	resp, err := handler.StartCapture(context.Background(), task)
+	if err != nil {
+		t.Fatalf("StartCapture error: %v", err)
+	}
+	if !resp.Accepted {
+		t.Error("expected task accepted")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// node-b should receive the command
+	streamB.mu.Lock()
+	sentB := len(streamB.sent)
+	streamB.mu.Unlock()
+	if sentB != 1 {
+		t.Errorf("node-b received %d commands, want 1", sentB)
+	}
+
+	// node-a and node-c should NOT receive the command
+	streamA.mu.Lock()
+	sentA := len(streamA.sent)
+	streamA.mu.Unlock()
+	if sentA != 0 {
+		t.Errorf("node-a received %d commands, want 0", sentA)
+	}
+
+	streamC.mu.Lock()
+	sentC := len(streamC.sent)
+	streamC.mu.Unlock()
+	if sentC != 0 {
+		t.Errorf("node-c received %d commands, want 0", sentC)
+	}
+
+	streamA.cancel()
+	streamB.cancel()
+	streamC.cancel()
+	<-doneA
+	<-doneB
+	<-doneC
+}

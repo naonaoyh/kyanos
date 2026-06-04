@@ -53,7 +53,7 @@ type DimensionReport struct {
 }
 
 // FormatJSON generates a structured JSON report for the session.
-func (r *DiagnosticReporter) FormatJSON(s *SessionRecord) *ReportJSON {
+func (r *DiagnosticReporter) FormatJSON(s *SessionRecord, store SessionStore) *ReportJSON {
 	report := &ReportJSON{
 		SessionID:    s.SessionID,
 		Mountpoint:   s.Mountpoint,
@@ -65,7 +65,12 @@ func (r *DiagnosticReporter) FormatJSON(s *SessionRecord) *ReportJSON {
 		StartTime:    s.StartTime.Format(time.RFC3339),
 		Duration:     formatDuration(s.DurationMs),
 		Score:        s.Score,
-		Issues:       s.Issues,
+	}
+	
+	// Copy original issues.
+	if len(s.Issues) > 0 {
+		report.Issues = make([]SessionIssue, len(s.Issues))
+		copy(report.Issues, s.Issues)
 	}
 
 	// Login dimension.
@@ -168,10 +173,66 @@ func (r *DiagnosticReporter) FormatJSON(s *SessionRecord) *ReportJSON {
 	}
 	report.Dimensions = append(report.Dimensions, netDim)
 
+	// Global session correlation.
+	stabilityScore := s.StabilityScore
+	var stabilityFindings []string
+	var correlationIssues []SessionIssue
+
+	if store != nil && s.Username != "" && s.TaskID != "" {
+		// List historical sessions for the same user and task
+		sessions, _ := store.ListSessions(SessionFilter{
+			Username: s.Username,
+			TaskID:   s.TaskID,
+		})
+
+		// Find the most recent closed session that ended before this one started.
+		var prev *SessionRecord
+		for _, ps := range sessions {
+			if ps.SessionID == s.SessionID || !ps.Closed {
+				continue
+			}
+			if ps.CloseTime.Before(s.StartTime) {
+				if prev == nil || ps.CloseTime.After(prev.CloseTime) {
+					prev = ps
+				}
+			}
+		}
+
+		if prev != nil {
+			reconnectDelay := s.StartTime.Sub(prev.CloseTime)
+			if reconnectDelay <= 60*time.Second {
+				stabilityFindings = append(stabilityFindings, fmt.Sprintf("Global Client Reconnection: reconnected %s after previous session (%s) closed", reconnectDelay.Round(time.Second), prev.SessionID))
+
+				// Check IP change (Connection Migration)
+				if s.ClientIP != prev.ClientIP {
+					stabilityFindings = append(stabilityFindings, fmt.Sprintf("Connection Migration: client IP changed from %s to %s", prev.ClientIP, s.ClientIP))
+				}
+
+				// Check Server/Pod/Node change (Cross-Server Migration)
+				if s.ServerPod != prev.ServerPod || s.NodeName != prev.NodeName {
+					stabilityFindings = append(stabilityFindings, fmt.Sprintf("Cross-Server Migration: client migrated from node %s (%s) to node %s (%s)", prev.NodeName, prev.ServerPod, s.NodeName, s.ServerPod))
+					
+					// Apply deduction for drift
+					stabilityScore = stabilityScore - 10
+					if stabilityScore < 0 {
+						stabilityScore = 0
+					}
+
+					// Append to issues
+					correlationIssues = append(correlationIssues, SessionIssue{
+						Category:    "STABILITY",
+						Severity:    "warn",
+						Description: fmt.Sprintf("Client migrated across nodes/pods after %s disconnect. (Previous: %s/%s, Current: %s/%s)", reconnectDelay.Round(time.Second), prev.NodeName, prev.ServerPod, s.NodeName, s.ServerPod),
+					})
+				}
+			}
+		}
+	}
+
 	// Stability dimension (disconnect reason).
 	stabDim := DimensionReport{
 		Name:     "Session Stability",
-		Score:    s.StabilityScore,
+		Score:    stabilityScore,
 		MaxScore: 100,
 		Metrics: map[string]any{
 			"disconnect_reason": s.DisconnectReason,
@@ -179,11 +240,18 @@ func (r *DiagnosticReporter) FormatJSON(s *SessionRecord) *ReportJSON {
 			"duration":          formatDuration(s.DurationMs),
 		},
 	}
-	stabDim.Status = dimensionStatus(s.StabilityScore)
+	stabDim.Status = dimensionStatus(stabilityScore)
 	if s.DisconnectReason != "" {
 		stabDim.Findings = append(stabDim.Findings, fmt.Sprintf("Disconnect: %s (%s)", s.DisconnectReason, s.DisconnectDetail))
 	}
+	// Append global stability findings
+	stabDim.Findings = append(stabDim.Findings, stabilityFindings...)
 	report.Dimensions = append(report.Dimensions, stabDim)
+
+	// Append correlation issues to report
+	if len(correlationIssues) > 0 {
+		report.Issues = append(report.Issues, correlationIssues...)
+	}
 
 	// Overall verdict.
 	switch {
@@ -201,8 +269,8 @@ func (r *DiagnosticReporter) FormatJSON(s *SessionRecord) *ReportJSON {
 }
 
 // FormatHTML generates an HTML diagnostic report for the session.
-func (r *DiagnosticReporter) FormatHTML(s *SessionRecord) string {
-	data := r.FormatJSON(s)
+func (r *DiagnosticReporter) FormatHTML(s *SessionRecord, store SessionStore) string {
+	data := r.FormatJSON(s, store)
 	var buf strings.Builder
 	if err := r.tmpl.Execute(&buf, data); err != nil {
 		return fmt.Sprintf("<html><body><h1>Report Generation Error</h1><p>%s</p></body></html>", err.Error())

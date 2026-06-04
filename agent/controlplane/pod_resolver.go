@@ -193,3 +193,17 @@ func (p *PodResolver) InFallback() bool {
 	p.mu.RUnlock()
 	return fb
 }
+
+// IPToPodNameMap returns a copy of the current cached mappings from Pod IP to Pod Name.
+func (p *PodResolver) IPToPodNameMap() map[string]string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	m := make(map[string]string)
+	for _, info := range p.cache {
+		if info.GetPodIp() != "" && info.GetPodName() != "" {
+			m[info.GetPodIp()] = info.GetPodName()
+		}
+	}
+	return m
+}
+

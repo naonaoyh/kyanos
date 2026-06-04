@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { listTasks, createTask, stopTask } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -22,11 +22,89 @@ const statusType = (s) => {
   return map[s] || 'info'
 }
 
+const sockets = {} // taskId -> WebSocket
+
+const connectTaskWS = (taskId) => {
+  if (sockets[taskId]) return
+  
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = window.location.host
+  const url = `${protocol}//${host}/api/v1/ws/tasks/${taskId}`
+  
+  const ws = new WebSocket(url)
+  sockets[taskId] = ws
+  
+  ws.onopen = () => {
+    console.log('WebSocket connected for task:', taskId)
+  }
+  
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'task_status') {
+        const updatedTask = msg.data
+        if (!updatedTask) return
+        
+        const idx = tasks.value.findIndex(t => t.id === updatedTask.id)
+        if (idx !== -1) {
+          tasks.value[idx] = updatedTask
+        }
+        
+        if (updatedTask.status !== 'running') {
+          closeTaskWS(updatedTask.id)
+        }
+      }
+    } catch (e) {
+      console.error('Failed to parse task WS message:', e)
+    }
+  }
+  
+  ws.onclose = () => {
+    console.log('WebSocket closed for task:', taskId)
+    delete sockets[taskId]
+  }
+  
+  ws.onerror = (err) => {
+    console.error('WebSocket error for task:', taskId, err)
+    ws.close()
+  }
+}
+
+const closeTaskWS = (taskId) => {
+  if (sockets[taskId]) {
+    sockets[taskId].close()
+    delete sockets[taskId]
+  }
+}
+
+const closeAllTaskWS = () => {
+  Object.keys(sockets).forEach(id => {
+    closeTaskWS(id)
+  })
+}
+
+const syncWebSockets = () => {
+  // Close unneeded sockets
+  Object.keys(sockets).forEach(id => {
+    const task = tasks.value.find(t => t.id === id)
+    if (!task || task.status !== 'running') {
+      closeTaskWS(id)
+    }
+  })
+  // Connect needed sockets
+  tasks.value.forEach(t => {
+    if (t.status === 'running') {
+      connectTaskWS(t.id)
+    }
+  })
+}
+
 const loadTasks = async () => {
   loading.value = true
   try {
     const { data } = await listTasks()
     tasks.value = data.items || []
+    syncWebSockets()
   } catch (e) {
     ElMessage.error('Failed to load tasks')
   } finally {
@@ -44,7 +122,7 @@ const handleCreate = async () => {
     const { data } = await createTask(payload)
     ElMessage.success(`Task ${data.task_id} created`)
     showCreate.value = false
-    loadTasks()
+    await loadTasks()
   } catch (e) {
     ElMessage.error('Failed to create task: ' + (e.response?.data?.error || e.message))
   }
@@ -55,13 +133,17 @@ const handleStop = async (taskId) => {
     await ElMessageBox.confirm(`Stop task ${taskId}?`, 'Confirm', { type: 'warning' })
     await stopTask(taskId)
     ElMessage.success(`Task ${taskId} stopped`)
-    loadTasks()
+    await loadTasks()
   } catch (e) {
     if (e !== 'cancel') ElMessage.error('Failed to stop task')
   }
 }
 
 onMounted(loadTasks)
+
+onUnmounted(() => {
+  closeAllTaskWS()
+})
 </script>
 
 <template>
