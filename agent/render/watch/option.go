@@ -15,6 +15,7 @@ type WatchOptions struct {
 	TraceDevEvent                bool
 	TraceSocketEvent             bool
 	TraceSslEvent                bool
+	DiagTracker                  DiagProvider // nil when --diag is off
 }
 
 func (w *WatchOptions) Init() {

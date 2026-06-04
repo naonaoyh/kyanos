@@ -141,6 +141,12 @@ func SetupAgent(options ac.AgentOptions) {
 			}
 		}
 		common.AgentLog.Info("NTRIP/RTCM session diagnosis enabled")
+
+		// Wire the session tracker into the TUI so operators can view
+		// diagnostic sessions in real time via the 'd' hotkey.
+		if options.WatchOptions.UseTui() {
+			options.WatchOptions.DiagTracker = &sessionTrackerDiagAdapter{tracker: sessionTracker}
+		}
 	}
 
 	conn.RecordFunc = func(r protocol.Record, c *conn.Connection4) error {

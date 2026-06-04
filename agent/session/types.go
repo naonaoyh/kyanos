@@ -137,6 +137,13 @@ func (s *NTRIPSession) RTCMTotalBytes() int64 {
 	return s.rtcmTotalBytes
 }
 
+// GGAEventCount returns the number of GGA events observed so far.
+func (s *NTRIPSession) GGAEventCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.GGAEvents)
+}
+
 // RTCMFrameRate returns the average RTCM frames-per-second over the session's
 // duration so far. Returns 0 when the duration is non-positive or no frames
 // have been seen.

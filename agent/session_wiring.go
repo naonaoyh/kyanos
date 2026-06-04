@@ -2,6 +2,7 @@ package agent
 
 import (
 	"kyanos/agent/conn"
+	"kyanos/agent/render/watch"
 	"kyanos/agent/session"
 )
 
@@ -29,4 +30,37 @@ func connInfoFromConnection4(c *conn.Connection4) *session.ConnInfo {
 // GGA-timeout / unknown branches. See docs/ROADMAP_NEXT.md §3.3.
 func inferCloseDirection(c *conn.Connection4) session.CloseDirection {
 	return session.CloseDirectionUnknown
+}
+
+// ---------------------------------------------------------------------------
+// DiagProvider adapter: bridges session.SessionTracker → watch.DiagProvider
+// ---------------------------------------------------------------------------
+
+// sessionTrackerDiagAdapter wraps a SessionTracker so it satisfies the
+// watch.DiagProvider interface without the render package importing session.
+type sessionTrackerDiagAdapter struct {
+	tracker *session.SessionTracker
+}
+
+func (a *sessionTrackerDiagAdapter) DiagSnapshots() []watch.DiagSessionSnapshot {
+	all := a.tracker.AllSessions()
+	out := make([]watch.DiagSessionSnapshot, 0, len(all))
+	for _, s := range all {
+		out = append(out, watch.DiagSessionSnapshot{
+			SessionID:  s.SessionID,
+			MountPoint: s.MountPoint,
+			Username:   s.Username,
+			ClientIP:   s.ClientIP,
+			ClientRole: s.ClientRole,
+			Duration:   s.Duration(),
+			IsActive:   s.IsActive(),
+			Score:      s.Score(session.DefaultReportConfig().GGAWarnInterval, session.DefaultReportConfig().RTCMWarnInterval).Total,
+			GGAEvents:  s.GGAEventCount(),
+			RTCMFrames: s.RTCMFrameCount(),
+			RTCMBytes:  s.RTCMTotalBytes(),
+			AuthMethod: s.AuthMethod,
+			Disconnect: s.DisconnectReason.String(),
+		})
+	}
+	return out
 }

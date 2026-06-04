@@ -192,6 +192,13 @@ type model struct {
 	sortBy                rc.SortBy
 	reverse               bool
 	options               WatchOptions
+
+	// Diagnostic view state (active only when options.DiagTracker != nil)
+	diagMode      bool
+	diagTable     table.Model
+	diagViewport  viewport.Model
+	diagChosen    bool // viewing a specific session detail
+	diagSnapshots []DiagSessionSnapshot
 }
 
 func NewModel(options WatchOptions, records *[]*common.AnnotatedRecord, initialWindownSizeMsg tea.WindowSizeMsg,
@@ -343,12 +350,24 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case spinner.TickMsg, rc.TickMsg:
-		m.updateRowsInTable()
+		if !m.diagMode {
+			m.updateRowsInTable()
+		} else if m.options.DiagTracker != nil && !m.diagChosen {
+			m.refreshDiagSnapshots()
+		}
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
+			if m.diagMode {
+				if m.diagChosen {
+					m.diagChosen = false
+				} else {
+					m.diagMode = false
+				}
+				return m, nil
+			}
 			if m.chosen {
 				m.chosen = false
 			} else {
@@ -360,7 +379,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "d":
+			if m.options.DiagTracker != nil {
+				m.diagMode = !m.diagMode
+				m.diagChosen = false
+				if m.diagMode {
+					m.refreshDiagSnapshots()
+				}
+			}
+			return m, nil
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			if m.diagMode {
+				break
+			}
 			i, err := strconv.Atoi(msg.String())
 			if !m.chosen {
 				if err == nil {
@@ -368,6 +399,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "n", "p":
+			if m.diagMode {
+				break
+			}
 			if !m.chosen {
 				break
 			}
@@ -378,6 +412,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			fallthrough
 		case "enter":
+			if m.diagMode {
+				if !m.diagChosen {
+					selected := m.diagTable.SelectedRow()
+					if selected != nil {
+						idx, _ := strconv.Atoi(selected[0])
+						if idx >= 1 && idx <= len(m.diagSnapshots) {
+							snap := m.diagSnapshots[idx-1]
+							detail := RenderSessionDetail(snap, m.diagViewport.Width)
+							m.diagViewport.SetContent(detail)
+							m.diagViewport.GotoTop()
+							m.diagChosen = true
+						}
+					}
+				}
+				return m, nil
+			}
 			m.chosen = true
 
 			if m.chosen {
@@ -387,8 +437,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					r := (*m.records)[idx-1]
 					line := strings.Repeat("+", m.viewport.Width)
 					timeDetail := ViewRecordTimeDetailAsFlowChart(r)
-					// m.viewport.SetContent("[Request]\n\n" + c.TruncateString(r.Req.FormatToString(), 1024) + "\n" + line + "\n[Response]\n\n" +
-					// 	c.TruncateString(r.Resp.FormatToString(), 10240))
 					m.viewport.SetContent(
 						timeDetail + "\n" + line + "\n" +
 							r.String(common.AnnotatedRecordToStringOptions{
@@ -404,12 +452,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
-			// return m, tea.Batch(
-			// 	tea.Printf("Let's go to %s!", m.table.SelectedRow()[1]),
-			// )
 		}
 	case tea.WindowSizeMsg:
-		m.updateDetailViewPortSize(msg)
+		if m.diagMode {
+			m.updateDiagViewportSize(msg)
+		} else {
+			m.updateDetailViewPortSize(msg)
+		}
+	}
+	if m.diagMode {
+		if m.diagChosen {
+			m.diagViewport, cmd = m.diagViewport.Update(msg)
+		} else {
+			m.diagTable, cmd = m.diagTable.Update(msg)
+		}
+		return m, cmd
 	}
 	if m.chosen {
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -450,11 +507,6 @@ func (m *model) updateDetailViewPortSize(msg tea.WindowSizeMsg) {
 	footerHeight := lipgloss.Height(m.footerView())
 	verticalMarginHeight := headerHeight + footerHeight
 	if !m.ready {
-		// Since this program is using the full size of the viewport we
-		// need to wait until we've received the window dimensions before
-		// we can initialize the viewport. The initial dimensions come in
-		// quickly, though asynchronously, which is why we wait for them
-		// here.
 		m.viewport = viewport.New(msg.Width, msg.Height-verticalMarginHeight)
 		m.ready = true
 	} else {
@@ -463,7 +515,25 @@ func (m *model) updateDetailViewPortSize(msg tea.WindowSizeMsg) {
 	}
 }
 
+func (m *model) updateDiagViewportSize(msg tea.WindowSizeMsg) {
+	titleH := lipgloss.Height(RenderSessionDetailTitle(DiagSessionSnapshot{}, msg.Width))
+	footerH := lipgloss.Height(RenderSessionDetailFooter(0, msg.Width))
+	margin := titleH + footerH
+	m.diagViewport = viewport.New(msg.Width, msg.Height-margin)
+}
+
+func (m *model) refreshDiagSnapshots() {
+	if m.options.DiagTracker == nil {
+		return
+	}
+	m.diagSnapshots = m.options.DiagTracker.DiagSnapshots()
+	m.diagTable = NewDiagTable(m.diagSnapshots)
+}
+
 func (m *model) View() string {
+	if m.diagMode {
+		return m.viewDiag()
+	}
 	if m.chosen {
 		selected := m.table.SelectedRow()
 		if selected != nil {
@@ -483,6 +553,22 @@ func (m *model) View() string {
 		}
 		return s + rc.BaseTableStyle.Render(m.table.View()) + "\n  " + m.table.HelpView() + "\n"
 	}
+}
+
+func (m *model) viewDiag() string {
+	if m.diagChosen {
+		return fmt.Sprintf("%s\n%s\n%s",
+			RenderSessionDetailTitle(m.diagSnapshots[m.diagTable.Cursor()], m.diagViewport.Width),
+			m.diagViewport.View(),
+			RenderSessionDetailFooter(m.diagViewport.ScrollPercent(), m.diagViewport.Width),
+		)
+	}
+	return fmt.Sprintf("\n%s\n\n%s\n\n%s\n%s\n",
+		RenderDiagTitle(m.diagTable.Width()),
+		RenderDiagHeader(m.diagSnapshots),
+		rc.BaseTableStyle.Render(m.diagTable.View()),
+		RenderDiagFooter(),
+	)
 }
 func (m model) headerView() string {
 	title := titleStyle.Render(fmt.Sprintf("Record Detail: %d (Total: %d)", m.table.Cursor()+1, len(m.table.Rows())))
