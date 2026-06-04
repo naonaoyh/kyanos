@@ -1,12 +1,14 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { getSessionReport } from '../api'
+import { getSessionReport, getSession } from '../api'
 
 const route = useRoute()
 const report = ref(null)
+const sessionClosed = ref(false)
 const loading = ref(false)
-const rawHtml = ref('')
+let refreshTimer = null
+let socket = null
 
 const verdictType = (v) => {
   const map = { HEALTHY: 'success', DEGRADED: 'warning', POOR: 'warning', CRITICAL: 'danger' }
@@ -25,16 +27,81 @@ const statusColor = (s) => {
   return '#f56c6c'
 }
 
-onMounted(async () => {
-  loading.value = true
+const loadReport = async () => {
   try {
     const { data } = await getSessionReport(route.params.id, 'json')
     report.value = data
   } catch (e) {
     console.error('Failed to load report:', e)
-  } finally {
-    loading.value = false
   }
+}
+
+const connectWS = () => {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const url = `${protocol}//${window.location.host}/api/v1/ws/sessions/${route.params.id}`
+
+  socket = new WebSocket(url)
+
+  socket.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'session_update' && msg.data?.closed) {
+        sessionClosed.value = true
+        loadReport() // Refresh report with final data
+        closeWS()
+      } else if (msg.type === 'session_event') {
+        // Session still active — refresh report periodically
+        if (!refreshTimer) {
+          refreshTimer = setInterval(loadReport, 5000)
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  socket.onclose = () => {
+    if (!sessionClosed.value) {
+      setTimeout(connectWS, 5000)
+    }
+  }
+
+  socket.onerror = () => {
+    socket?.close()
+  }
+}
+
+const closeWS = () => {
+  if (socket) {
+    socket.close()
+    socket = null
+  }
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+onMounted(async () => {
+  loading.value = true
+  await loadReport()
+  loading.value = false
+
+  // Check if session is already closed
+  try {
+    const { data } = await getSession(route.params.id)
+    sessionClosed.value = data.closed
+  } catch {
+    // ignore
+  }
+
+  if (!sessionClosed.value) {
+    connectWS()
+  }
+})
+
+onUnmounted(() => {
+  closeWS()
 })
 </script>
 
@@ -43,9 +110,14 @@ onMounted(async () => {
     <template v-if="report">
       <div class="report-header">
         <h2>Diagnostic Report</h2>
-        <el-tag :type="verdictType(report.verdict)" size="large" effect="dark">
-          {{ report.verdict }} — Score: {{ report.score }}/100
-        </el-tag>
+        <div class="header-right">
+          <el-tag v-if="!sessionClosed" type="success" size="small" effect="plain">
+            Live — updating
+          </el-tag>
+          <el-tag :type="verdictType(report.verdict)" size="large" effect="dark">
+            {{ report.verdict }} — Score: {{ report.score }}/100
+          </el-tag>
+        </div>
       </div>
 
       <el-descriptions :column="2" border class="report-meta">
@@ -123,6 +195,11 @@ onMounted(async () => {
   margin-bottom: 16px;
 }
 .report-header h2 { margin: 0; }
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .dimension-card { margin-bottom: 12px; }
 .dim-header {
   display: flex;

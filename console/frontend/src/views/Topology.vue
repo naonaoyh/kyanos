@@ -1,26 +1,50 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { getTopology } from '../api'
 
 const nodes = ref([])
 const loading = ref(false)
+const lastUpdated = ref(null)
+let pollTimer = null
 
-onMounted(async () => {
-  loading.value = true
+const formatTime = (d) => {
+  if (!d) return '-'
+  return d.toLocaleTimeString()
+}
+
+const loadTopology = async () => {
   try {
     const { data } = await getTopology()
     nodes.value = data.nodes || []
+    lastUpdated.value = new Date()
   } catch (e) {
     console.error('Failed to load topology:', e)
-  } finally {
-    loading.value = false
+  }
+}
+
+onMounted(async () => {
+  loading.value = true
+  await loadTopology()
+  loading.value = false
+  pollTimer = setInterval(loadTopology, 10000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
   }
 })
 </script>
 
 <template>
   <div class="topology-view">
-    <h2>Cluster Topology</h2>
+    <div class="view-header">
+      <h2>Cluster Topology</h2>
+      <span class="last-updated" v-if="lastUpdated">
+        Updated: {{ formatTime(lastUpdated) }}
+      </span>
+    </div>
 
     <el-skeleton :loading="loading" :rows="6" animated>
       <template #default>
@@ -85,6 +109,14 @@ onMounted(async () => {
 
 <style scoped>
 .topology-view { padding: 8px; }
+.view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.view-header h2 { margin: 0; }
+.last-updated { font-size: 12px; color: #909399; }
 .node-card { margin-bottom: 16px; }
 .node-header {
   display: flex;

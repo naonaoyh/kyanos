@@ -1,9 +1,13 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { listSessions } from '../api'
 
 const sessions = ref([])
 const loading = ref(false)
+const lastUpdated = ref(null)
+const previousAlertCount = ref(0)
+const hasNewAlerts = ref(false)
+let pollTimer = null
 
 const alerts = computed(() => {
   const result = []
@@ -20,7 +24,6 @@ const alerts = computed(() => {
         })
       }
     }
-    // Also flag sessions with low scores.
     if (s.score < 60 && (!s.issues || s.issues.length === 0)) {
       result.push({
         session_id: s.session_id,
@@ -37,6 +40,20 @@ const alerts = computed(() => {
   return result
 })
 
+const alertSummary = computed(() => {
+  const critical = alerts.value.filter(a => a.severity === 'critical' || a.severity === 'error').length
+  const warning = alerts.value.filter(a => a.severity === 'warning').length
+  return { critical, warning, total: alerts.value.length }
+})
+
+watch(() => alerts.value.length, (newCount) => {
+  if (previousAlertCount.value > 0 && newCount > previousAlertCount.value) {
+    hasNewAlerts.value = true
+    setTimeout(() => { hasNewAlerts.value = false }, 5000)
+  }
+  previousAlertCount.value = newCount
+})
+
 const severityType = (sev) => {
   switch (sev) {
     case 'critical':
@@ -49,23 +66,58 @@ const severityType = (sev) => {
   }
 }
 
-onMounted(async () => {
-  loading.value = true
+const loadSessions = async () => {
   try {
-    // Fetch all closed sessions to find issues.
     const { data } = await listSessions({ limit: 500 })
     sessions.value = data.items || []
+    lastUpdated.value = new Date()
   } catch (e) {
     console.error('Failed to load sessions:', e)
-  } finally {
-    loading.value = false
+  }
+}
+
+onMounted(async () => {
+  loading.value = true
+  await loadSessions()
+  loading.value = false
+  pollTimer = setInterval(loadSessions, 15000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
   }
 })
 </script>
 
 <template>
   <div class="alerts-view">
-    <h2>Alerts &amp; Anomalies</h2>
+    <div class="view-header">
+      <h2>Alerts &amp; Anomalies</h2>
+      <div class="header-right">
+        <transition name="fade">
+          <el-tag v-if="hasNewAlerts" type="danger" size="small" effect="dark" class="new-alert-badge">
+            New alerts
+          </el-tag>
+        </transition>
+        <span class="last-updated" v-if="lastUpdated">
+          Updated: {{ lastUpdated.toLocaleTimeString() }}
+        </span>
+      </div>
+    </div>
+
+    <div class="alert-summary" v-if="alerts.length > 0">
+      <el-tag type="danger" size="small" v-if="alertSummary.critical">
+        {{ alertSummary.critical }} Critical
+      </el-tag>
+      <el-tag type="warning" size="small" v-if="alertSummary.warning">
+        {{ alertSummary.warning }} Warning
+      </el-tag>
+      <el-tag type="info" size="small">
+        {{ alertSummary.total }} Total
+      </el-tag>
+    </div>
 
     <el-empty v-if="!loading && alerts.length === 0" description="No alerts" />
 
@@ -89,5 +141,35 @@ onMounted(async () => {
 
 <style scoped>
 .alerts-view { padding: 8px; }
-h2 { margin: 0 0 16px 0; }
+.view-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.view-header h2 { margin: 0; }
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.last-updated { font-size: 12px; color: #909399; }
+.new-alert-badge {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.alert-summary {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.5s;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+}
 </style>
