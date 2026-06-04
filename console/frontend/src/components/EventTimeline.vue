@@ -1,13 +1,43 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 
 const props = defineProps({
   events: { type: Array, default: () => [] },
 })
 
-// Classify events as uplink (client→server) or downlink (server→client).
-// Auth, GGA are uplink (from client). RTCM is downlink (from server).
-// Network and close are neutral.
+const activeFilter = ref('all') // 'all' | 'auth' | 'gga' | 'rtcm' | 'network' | 'close'
+const timelineBody = ref(null)
+
+const filteredEvents = computed(() => {
+  if (activeFilter.value === 'all') return props.events
+  return props.events.filter(e => e.event_type === activeFilter.value)
+})
+
+const eventCounts = computed(() => {
+  const counts = { all: props.events.length }
+  for (const e of props.events) {
+    counts[e.event_type] = (counts[e.event_type] || 0) + 1
+  }
+  return counts
+})
+
+const filterOptions = [
+  { key: 'all', label: 'All' },
+  { key: 'rtcm', label: 'RTCM' },
+  { key: 'gga', label: 'GGA' },
+  { key: 'auth', label: 'Auth' },
+  { key: 'network', label: 'Net' },
+  { key: 'close', label: 'Close' },
+]
+
+// Auto-scroll to bottom when new events arrive
+watch(() => props.events.length, async () => {
+  await nextTick()
+  if (timelineBody.value) {
+    timelineBody.value.scrollTop = timelineBody.value.scrollHeight
+  }
+})
+
 const classifyEvent = (type) => {
   switch (type) {
     case 'auth':
@@ -72,6 +102,21 @@ const eventDataSummary = (evt) => {
 
 <template>
   <div class="event-timeline">
+    <div class="timeline-controls">
+      <el-radio-group v-model="activeFilter" size="small">
+        <el-radio-button
+          v-for="opt in filterOptions"
+          :key="opt.key"
+          :value="opt.key"
+        >
+          {{ opt.label }}
+          <span class="count-badge" v-if="eventCounts[opt.key]">
+            {{ eventCounts[opt.key] }}
+          </span>
+        </el-radio-button>
+      </el-radio-group>
+    </div>
+
     <div class="timeline-header">
       <div class="col-time">Time (UTC)</div>
       <div class="col-uplink">
@@ -82,9 +127,9 @@ const eventDataSummary = (evt) => {
       </div>
     </div>
 
-    <div class="timeline-body">
+    <div class="timeline-body" ref="timelineBody">
       <div
-        v-for="(evt, i) in events"
+        v-for="(evt, i) in filteredEvents"
         :key="i"
         class="timeline-row"
         :class="{ anomaly: isAnomaly(evt) }"
@@ -112,7 +157,7 @@ const eventDataSummary = (evt) => {
         <div class="col-downlink" v-else></div>
       </div>
 
-      <div v-if="events.length === 0" class="empty-timeline">
+      <div v-if="filteredEvents.length === 0" class="empty-timeline">
         No events recorded for this session.
       </div>
     </div>
@@ -123,6 +168,14 @@ const eventDataSummary = (evt) => {
 .event-timeline {
   font-family: 'SF Mono', 'Fira Code', monospace;
   font-size: 13px;
+}
+.timeline-controls {
+  margin-bottom: 12px;
+}
+.count-badge {
+  font-size: 10px;
+  margin-left: 3px;
+  opacity: 0.7;
 }
 .timeline-header {
   display: grid;

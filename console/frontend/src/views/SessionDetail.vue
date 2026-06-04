@@ -9,8 +9,15 @@ const router = useRouter()
 const session = ref(null)
 const events = ref([])
 const loading = ref(false)
+const wsConnected = ref(false)
+const liveDuration = ref(0) // ms, updated every second for active sessions
 
 let socket = null
+let durationTimer = null
+
+// Throughput tracking
+const throughputWindow = ref([]) // timestamps of recent RTCM frames
+const rtcmPerSec = ref(0)
 
 const sessionStats = computed(() => {
   if (!session.value) return null
@@ -18,10 +25,10 @@ const sessionStats = computed(() => {
   return [
     { label: 'GGA Events', value: s.gga_events, icon: 'Location' },
     { label: 'RTCM Frames', value: s.rtcm_frames, icon: 'Document' },
+    { label: 'RTCM/s', value: rtcmPerSec.value.toFixed(1), icon: 'TrendCharts' },
     { label: 'Retransmissions', value: s.retransmissions, icon: 'RefreshRight' },
     { label: 'Avg RTT', value: s.avg_rtt_ms ? s.avg_rtt_ms.toFixed(1) + 'ms' : '-', icon: 'Timer' },
     { label: 'CRC Errors', value: s.rtcm_crc_errors, icon: 'Warning' },
-    { label: 'TCP Resets', value: s.tcp_resets, icon: 'Close' },
   ]
 })
 
@@ -41,6 +48,23 @@ const formatDuration = (ms) => {
   return `${s}s`
 }
 
+const updateThroughput = () => {
+  const now = Date.now()
+  // Keep only events from the last 5 seconds
+  throughputWindow.value = throughputWindow.value.filter(t => now - t < 5000)
+  rtcmPerSec.value = throughputWindow.value.length / 5.0
+}
+
+const startDurationTimer = () => {
+  if (session.value && !session.value.closed) {
+    const startTime = new Date(session.value.start_time).getTime()
+    durationTimer = setInterval(() => {
+      liveDuration.value = Date.now() - startTime
+      updateThroughput()
+    }, 1000)
+  }
+}
+
 const connectWebSocket = () => {
   if (session.value && session.value.closed) {
     return
@@ -48,13 +72,14 @@ const connectWebSocket = () => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const host = window.location.host
   const url = `${protocol}//${host}/api/v1/ws/sessions/${route.params.id}`
-  
+
   socket = new WebSocket(url)
-  
+
   socket.onopen = () => {
+    wsConnected.value = true
     console.log('WebSocket connected for session:', route.params.id)
   }
-  
+
   socket.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data)
@@ -65,11 +90,12 @@ const connectWebSocket = () => {
         if (!events.value.some(e => e.timestamp_ns === evt.timestamp_ns && e.event_type === evt.event_type)) {
           events.value.push(evt)
           events.value.sort((a, b) => a.timestamp_ns - b.timestamp_ns)
-          
+
           // Live statistics updates
           if (session.value) {
             if (evt.event_type === 'rtcm') {
               session.value.rtcm_frames = (session.value.rtcm_frames || 0) + 1
+              throughputWindow.value.push(Date.now())
               if (evt.event_data) {
                 session.value.rtcm_bytes = (session.value.rtcm_bytes || 0) + (evt.event_data.size || 0)
                 if (!evt.event_data.crc_valid) {
@@ -92,6 +118,11 @@ const connectWebSocket = () => {
       } else if (msg.type === 'session_update') {
         session.value = msg.data
         if (session.value && session.value.closed) {
+          liveDuration.value = session.value.duration_ms || liveDuration.value
+          if (durationTimer) {
+            clearInterval(durationTimer)
+            durationTimer = null
+          }
           closeWebSocket()
         }
       }
@@ -99,9 +130,10 @@ const connectWebSocket = () => {
       console.error('Failed to parse WebSocket message:', e)
     }
   }
-  
-  socket.onclose = (e) => {
-    console.log('WebSocket closed for session:', route.params.id, e.reason)
+
+  socket.onclose = () => {
+    wsConnected.value = false
+    console.log('WebSocket closed for session:', route.params.id)
     if (session.value && !session.value.closed) {
       setTimeout(() => {
         console.log('Attempting to reconnect WebSocket...')
@@ -109,7 +141,7 @@ const connectWebSocket = () => {
       }, 3000)
     }
   }
-  
+
   socket.onerror = (err) => {
     console.error('WebSocket error:', err)
     socket.close()
@@ -121,6 +153,7 @@ const closeWebSocket = () => {
     socket.close()
     socket = null
   }
+  wsConnected.value = false
 }
 
 onMounted(async () => {
@@ -132,6 +165,10 @@ onMounted(async () => {
     ])
     session.value = sessResp.data
     events.value = evtsResp.data.items || []
+    if (session.value) {
+      liveDuration.value = session.value.duration_ms || 0
+    }
+    startDurationTimer()
     connectWebSocket()
   } catch (e) {
     console.error('Failed to load session:', e)
@@ -142,6 +179,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   closeWebSocket()
+  if (durationTimer) {
+    clearInterval(durationTimer)
+    durationTimer = null
+  }
 })
 </script>
 
@@ -151,13 +192,23 @@ onUnmounted(() => {
       <el-button @click="router.push('/sessions')" link>
         <el-icon><ArrowLeft /></el-icon> Back to Sessions
       </el-button>
-      <el-button
-        type="primary"
-        size="small"
-        @click="router.push(`/sessions/${route.params.id}/report`)"
-      >
-        View Report
-      </el-button>
+      <div class="header-right">
+        <el-tag
+          :type="wsConnected ? 'success' : 'warning'"
+          size="small"
+          effect="plain"
+          class="ws-status"
+        >
+          {{ wsConnected ? 'Live' : 'Disconnected' }}
+        </el-tag>
+        <el-button
+          type="primary"
+          size="small"
+          @click="router.push(`/sessions/${route.params.id}/report`)"
+        >
+          View Report
+        </el-button>
+      </div>
     </div>
 
     <template v-if="session">
@@ -171,7 +222,7 @@ onUnmounted(() => {
         <div class="session-meta">
           <span>{{ session.server_pod }} ({{ session.node_name }})</span>
           <span>Started: {{ new Date(session.start_time).toLocaleString() }}</span>
-          <span>Duration: {{ formatDuration(session.duration_ms) }}</span>
+          <span>Duration: {{ formatDuration(liveDuration) }}</span>
         </div>
         <div class="session-score" :style="{ color: scoreColor(session.score) }">
           {{ session.score }}/100
@@ -189,7 +240,12 @@ onUnmounted(() => {
 
       <el-card class="timeline-card">
         <template #header>
-          <span>Event Timeline ({{ events.length }} events)</span>
+          <div class="timeline-header-row">
+            <span>Event Timeline ({{ events.length }} events)</span>
+            <el-tag v-if="!session.closed" type="success" size="small" effect="plain">
+              Receiving live events
+            </el-tag>
+          </div>
         </template>
         <EventTimeline :events="events" />
       </el-card>
@@ -205,6 +261,12 @@ onUnmounted(() => {
   align-items: center;
   margin-bottom: 16px;
 }
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ws-status { font-size: 11px; }
 .session-header { margin-bottom: 16px; }
 .session-title {
   display: flex;
@@ -231,4 +293,9 @@ onUnmounted(() => {
 .stat-value { font-size: 20px; font-weight: 700; }
 .stat-label { font-size: 12px; color: #909399; margin-top: 4px; }
 .timeline-card { margin-top: 8px; }
+.timeline-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
 </style>
