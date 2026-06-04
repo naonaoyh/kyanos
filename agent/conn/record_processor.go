@@ -27,7 +27,7 @@ func (p *RecordsProcessor) Run(recordChannel <-chan RecordWithConn, ticker *time
 				continue
 			}
 			slices.SortFunc(p.records, func(r1, r2 RecordWithConn) int {
-				return cmp.Compare(r1.Request().TimestampNs(), r2.Request().TimestampNs())
+				return cmp.Compare(r1.EffectiveResponse().TimestampNs(), r2.EffectiveResponse().TimestampNs())
 			})
 			lastProcessIdx := -1
 			now := time.Now().UnixMilli()
@@ -53,11 +53,18 @@ func submitRecord(record protocol.Record, c *Connection4) {
 	// Unidirectional protocols (RTCM, and RTCM/NMEA frames inside an NTRIP
 	// stream) produce records with no paired response. Treat their duration as
 	// zero and use the request as the effective response side for sizing.
-	duration := record.EffectiveResponse().TimestampNs() - record.Request().TimestampNs()
+	var duration uint64
+	if record.Request() != nil {
+		duration = record.EffectiveResponse().TimestampNs() - record.Request().TimestampNs()
+	}
 	needSubmit = needSubmit && c.LatencyFilter.Filter(float64(duration)/1000000)
 
+	reqSize := int64(0)
+	if record.Request() != nil {
+		reqSize = int64(record.Request().ByteSize())
+	}
 	needSubmit = needSubmit &&
-		c.SizeFilter.FilterByReqSize(int64(record.Request().ByteSize())) &&
+		c.SizeFilter.FilterByReqSize(reqSize) &&
 		c.SizeFilter.FilterByRespSize(int64(record.EffectiveResponse().ByteSize()))
 
 	// Force-parse messages when export is configured, even if filters don't require it
@@ -65,7 +72,7 @@ func submitRecord(record protocol.Record, c *Connection4) {
 
 	if parser := c.GetProtocolParser(c.Protocol); (needSubmit || forceParse) && parser != nil {
 		var parsedRequest, parsedResponse protocol.ParsedMessage
-		if c.MessageFilter.FilterByRequest() || forceParse {
+		if (c.MessageFilter.FilterByRequest() || forceParse) && record.Request() != nil {
 			parsedRequest = record.Request()
 		}
 		if c.MessageFilter.FilterByResponse() || forceParse {
