@@ -687,3 +687,75 @@ Phase 7 将独立 CLI Agent 升级为可远程控制的节点 Agent（gRPC 双�
 > **注意**: 以上所有验证项的纯逻辑部分（退避算法、环形缓冲、集合调和、事件投影、
 > 凭据脱敏、命令路由、任务状态机）已通过属性测试 + 单元测试在当前环境验证通过。
 > deferred 的仅是 live 基础设施交互层。
+
+---
+
+## 12. Phase 8: Web Console Backend ✅ 已完成 (2026-06-04)
+
+### 12.1 交付物
+
+| 文件 | 说明 |
+|------|------|
+| `console/types.go` | 领域类型 (Agent, Task, SessionRecord, SessionEventRecord) + protobuf 转换 |
+| `console/store.go` | `SessionStore` 接口 + `MemoryStore` 实现 (多维过滤/分页) |
+| `console/grpc_server.go` | `AgentServiceHandler` 实现 `AgentServiceServer` (5 RPCs) |
+| `console/api.go` | REST API (15 端点: tasks, sessions, agents, topology, WebSocket, health) |
+| `console/websocket.go` | `WSHub` 主题发布/订阅 + `channelSubscriber` 参考实现 |
+| `console/report.go` | `DiagnosticReporter` 五维度诊断报告 (HTML + JSON) |
+| `console/console.go` | `Console` 主编排器 (gRPC + HTTP 统一启停, graceful shutdown) |
+| `cmd/console.go` | CLI 命令 `kyanos console --grpc-addr :50051 --http-addr :8080` |
+
+### 12.2 测试覆盖
+
+78 个测试函数，覆盖:
+- Store CRUD / 过滤 / 分页 / 时间范围
+- gRPC stream mock (Connect/ReportEvents/StartCapture/StopCapture/ReportStatus)
+- REST API 集成测试 (httptest)
+- WebSocket hub (subscribe/unsubscribe/broadcast/concurrent)
+- Protobuf 转换 (所有事件类型 + nil 安全)
+- 报告生成 (HTML/JSON, HEALTHY/DEGRADED/CRITICAL verdicts)
+
+### 12.3 技术决策
+
+1. **纯标准库 HTTP**: 使用 Go 1.22+ `net/http` 路由 (`{param}` 语法)，不引入 Gin/chi 外部依赖
+2. **WebSocket 自实现**: 使用 `net/http.Hijacker` 做 WebSocket 握手，无 gorilla 依赖；生产环境可替换
+3. **MemoryStore 优先**: 接口化存储，先用内存实现快速交付，后续可换 ClickHouse/TimescaleDB
+4. **凭证安全不变量**: Console 侧类型严格无密码字段，与 Agent 侧 `redactor.go` 双重保障
+
+---
+
+## 13. Phase 9: Web Console Frontend ✅ 已完成 (2026-06-04)
+
+### 13.1 技术栈
+
+Vue 3 + Vite + Element Plus + Axios + Vue Router
+
+### 13.2 交付物
+
+| 文件 | 说明 |
+|------|------|
+| `src/App.vue` | 主布局: 侧边栏导航 + 健康状态显示 |
+| `src/router/index.js` | 7 路由 (topology, tasks, sessions, session detail, report, alerts) |
+| `src/api/index.js` | Axios API 客户端 (tasks/sessions/agents/topology/health) |
+| `src/views/Topology.vue` | 集群拓扑: 节点卡片 + Pod 列表 + 在线/离线状态 |
+| `src/views/Tasks.vue` | 任务管理: 表格列表 + 创建对话框 + 停止确认 |
+| `src/views/SessionExplorer.vue` | 会话浏览器: 过滤栏 + 可点击表格 + 评分标签 |
+| `src/views/SessionDetail.vue` | 会话详情: 元信息 + 6 项统计卡 + 事件时间线 |
+| `src/views/Report.vue` | 诊断报告: 五维度展示 + metrics + findings + issues |
+| `src/views/Alerts.vue` | 告警面板: 异常事件聚合 + 严重程度标签 |
+| `src/components/EventTimeline.vue` | **核心组件**: 双列上行/下行时间线 + 异常高亮 |
+
+### 13.3 构建与运行
+
+```bash
+cd console/frontend
+npm install
+npm run dev    # 开发模式 (Vite HMR, 自动代理到 :8080)
+npm run build  # 生产构建 → dist/
+```
+
+### 13.4 已知限制
+
+1. **WebSocket 前端集成**: 前端尚未实现原生 WebSocket 客户端连接（当前为轮询模式）；后续可用 `useWebSocket` composable
+2. **虚拟滚动**: Session 列表和 Timeline 未实现虚拟滚动（Element Plus `el-table-v2` 可后续集成）
+3. **国际化**: 当前全英文 UI，后续可加 i18n
