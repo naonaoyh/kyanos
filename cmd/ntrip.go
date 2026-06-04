@@ -120,6 +120,7 @@ Examples:
 		// Enable session diagnostics if --diag is specified
 		initSessionDiagnosis(cmd)
 		applyLeapSeconds(cmd)
+		applyPcapOptions(cmd)
 
 		startAgent(cmd)
 	},

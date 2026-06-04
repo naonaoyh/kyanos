@@ -11,6 +11,7 @@ import (
 	"kyanos/agent/compatible"
 	"kyanos/agent/conn"
 	"kyanos/agent/controlplane"
+	"kyanos/agent/export"
 	"kyanos/agent/protocol"
 	"kyanos/agent/protocol/ntrip"
 	"kyanos/agent/protocol/rtcm"
@@ -149,6 +150,31 @@ func SetupAgent(options ac.AgentOptions) {
 		}
 	}
 
+	// Standalone PCAP-NG export (--pcap-output). Independent of --diag and gRPC.
+	var standalonePcapWriter *export.PcapNgWriter
+	if options.PcapOutputPath != "" {
+		rotator, err := export.NewRotateWriter(export.RotateWriterConfig{
+			BasePath:    options.PcapOutputPath,
+			MaxSize:     options.PcapMaxSize,
+			MaxDuration: options.PcapMaxDuration,
+			HeaderGenerator: func() []byte {
+				return export.GetGlobalHeaderBytes(nil)
+			},
+		})
+		if err != nil {
+			common.AgentLog.Errorf("failed to create pcap rotator: %v", err)
+		} else {
+			writer, err := export.NewPcapNgWriter(rotator, nil)
+			if err != nil {
+				common.AgentLog.Errorf("failed to create pcap writer: %v", err)
+				rotator.Close()
+			} else {
+				standalonePcapWriter = writer
+				common.AgentLog.Infof("PCAP-NG export enabled: %s", options.PcapOutputPath)
+			}
+		}
+	}
+
 	conn.RecordFunc = func(r protocol.Record, c *conn.Connection4) error {
 		var activeSession *session.NTRIPSession
 		if sessionTracker != nil {
@@ -162,8 +188,18 @@ func SetupAgent(options ac.AgentOptions) {
 			sessionTracker.OnRecord(r, connInfoFromConnection4(c))
 		}
 
-		if activeSession != nil && taskMgr != nil {
-			if pcapExp, taskID, ok := taskMgr.GetPcapNgExpForConn(activeSession); ok && pcapExp != nil {
+		// PCAP export: try taskMgr first, fall back to standalone writer.
+		if activeSession != nil {
+			var pcapExp *export.PcapNgWriter
+			var taskID string
+			if taskMgr != nil {
+				pcapExp, taskID, _ = taskMgr.GetPcapNgExpForConn(activeSession)
+			}
+			if pcapExp == nil && standalonePcapWriter != nil {
+				pcapExp = standalonePcapWriter
+				taskID = "standalone"
+			}
+			if pcapExp != nil {
 				payload, isReq, tsNs := extractRawPayloadFromRecord(r)
 				if len(payload) > 0 {
 					comment := generatePacketComment(activeSession, r, taskID)
@@ -206,8 +242,16 @@ func SetupAgent(options ac.AgentOptions) {
 			activeSession, _ = sessionTracker.FindActiveSession(clientIP, clientPort)
 		}
 
-		if activeSession != nil && taskMgr != nil {
-			if pcapExp, _, ok := taskMgr.GetPcapNgExpForConn(activeSession); ok && pcapExp != nil {
+		// PCAP FIN injection: try taskMgr first, fall back to standalone writer.
+		if activeSession != nil {
+			var pcapExp *export.PcapNgWriter
+			if taskMgr != nil {
+				pcapExp, _, _ = taskMgr.GetPcapNgExpForConn(activeSession)
+			}
+			if pcapExp == nil && standalonePcapWriter != nil {
+				pcapExp = standalonePcapWriter
+			}
+			if pcapExp != nil {
 				clientIPNet := net.ParseIP(activeSession.ClientIP)
 				serverIPNet := net.ParseIP(activeSession.ServerIP)
 				var serverPort uint16
@@ -468,6 +512,15 @@ func SetupAgent(options ac.AgentOptions) {
 	if jsonlExporter != nil {
 		if err := jsonlExporter.Close(); err != nil {
 			common.AgentLog.Warnf("failed to close JSONL export: %v", err)
+		}
+	}
+
+	// Close the standalone PCAP-NG writer, if enabled.
+	if standalonePcapWriter != nil {
+		if err := standalonePcapWriter.Close(); err != nil {
+			common.AgentLog.Warnf("failed to close PCAP export: %v", err)
+		} else {
+			common.AgentLog.Infof("PCAP-NG export closed: %s", options.PcapOutputPath)
 		}
 	}
 

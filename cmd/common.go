@@ -189,6 +189,23 @@ func applyLeapSeconds(cmd *cobra.Command) {
 	}
 }
 
+// applyPcapOptions reads the --pcap-output flags (if registered) and populates
+// the corresponding AgentOptions fields. Independent of --diag.
+func applyPcapOptions(cmd *cobra.Command) {
+	if cmd.Flags().Lookup("pcap-output") == nil {
+		return
+	}
+	if path, err := cmd.Flags().GetString("pcap-output"); err == nil && path != "" {
+		options.PcapOutputPath = path
+	}
+	if sz, err := cmd.Flags().GetInt64("pcap-max-size"); err == nil {
+		options.PcapMaxSize = sz
+	}
+	if dur, err := cmd.Flags().GetDuration("pcap-max-duration"); err == nil {
+		options.PcapMaxDuration = dur
+	}
+}
+
 // initGRPCOptions reads the shared gRPC control-plane persistent flags
 // (registered by root.go init) and populates options.GRPCOptions. When
 // --grpc-server is empty (the default), GRPCOptions stays at its zero value and
@@ -273,6 +290,12 @@ func addSessionDiagnosisFlags(cmd *cobra.Command) {
 		"Export one structured session-summary JSON object per line to this file as sessions close (requires --diag)")
 	cmd.Flags().Int("leap-seconds", 0,
 		"Override the GPS-UTC leap second offset for RTCM epoch latency (0 = use built-in default 18)")
+	cmd.Flags().String("pcap-output", "",
+		"Write captured NTRIP/RTCM traffic to a PCAP-NG file (supports Wireshark)")
+	cmd.Flags().Int64("pcap-max-size", 100*1024*1024,
+		"Max pcap file size in bytes before rotation (default 100MB, 0=unlimited)")
+	cmd.Flags().Duration("pcap-max-duration", 1*time.Hour,
+		"Max pcap file duration before rotation (default 1h, 0=unlimited)")
 }
 
 func InitLog() {

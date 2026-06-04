@@ -79,6 +79,15 @@ type AgentOptions struct {
 	// close. Only consulted when SessionDiagnosisEnable is true.
 	SessionJSONLPath string
 
+	// PcapOutputPath, when non-empty, writes captured NTRIP/RTCM traffic to a
+	// PCAP-NG file at this path. Supports file rotation via PcapMaxSize and
+	// PcapMaxDuration. Does not require --diag or gRPC.
+	PcapOutputPath string
+	// PcapMaxSize is the max pcap file size in bytes before rotation (0 = unlimited).
+	PcapMaxSize int64
+	// PcapMaxDuration is the max pcap file duration before rotation (0 = unlimited).
+	PcapMaxDuration time.Duration
+
 	// GRPCServer is the Control Plane / Console address (host:port) supplied via
 	// the --grpc-server flag. An empty value (the default zero value) keeps the
 	// Agent in Standalone_CLI_Mode: no gRPC_Client is constructed and behaviour
