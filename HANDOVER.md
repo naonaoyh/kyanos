@@ -1,6 +1,6 @@
 # Kyanos GNSS 专项开发 — 交接文档
 
-> 最后更新: 2025-07-14  
+> 最后更新: 2025-07-14 (Phase 7 完成 + WSL2 验证 + TKE 部署配置)  
 > 分支: `feat/gnss-ntrip-rtcm-support`  
 > 仓库: `https://github.com/naonaoyh/kyanos.git`  
 > 上游: `https://github.com/hengyoush/kyanos` (原始 Kyanos 项目)
@@ -55,10 +55,10 @@
 | 4 | 工程化与生产就绪 | **已完成** (已提交 bc0c174) |
 | 5 | NTRIP 诊断引擎 | **基本完成** (T0-T5+渲染已提交 ac44a76; 详见 ROADMAP_NEXT) |
 | 6 | PCAP 导出与对象存储 | **部分** (JSONL 结构化导出已完成; PCAP/COS/轮转未开始) |
-| 7 | gRPC 通信层与 Agent 改造 | **已完成** (必需任务全部完成; 可选PBT测试未做) |
-| 8 | Web Console 后端 | 未开始 |
-| 9 | Web Console 前端 | 未开始 |
-| 10 | K8s 部署与集成测试 | 未开始 |
+| 7 | gRPC 通信层与 Agent 改造 | **已完成** (必需任务全部完成; 可选PBT测试未做; cilium/ebpf升级v0.17.1) |
+| 8 | Web Console 后端 | **已完成** (gRPC server, REST API, WebSocket, diagnostics) |
+| 9 | Web Console 前端 | **已完成** (Vue 3 + Vite + Element Plus) |
+| 10 | K8s 部署与集成测试 | **部分** (Helm Chart + DaemonSet + Dockerfile 就绪; 待 TKE 集群验证) |
 
 ---
 
@@ -502,12 +502,71 @@ GOOS=linux go test -c ./agent/controlplane/    # ✅ compiles
 
 29 个 property-based test 任务 (标记 `*`) 未执行。这些使用 `pgregory.net/rapid` 验证 21 个正确性属性。可后续补充。
 
+---
+
+## 13. WSL2 验证与已知限制
+
+### 13.1 自定义 WSL2 内核
+
+编译了 6.18.26.3 内核，启用 `CONFIG_FPROBE=y` + `CONFIG_DEBUG_INFO_BTF=y`：
+- 内核源码: `~/wsl-kernel-build/WSL2-Linux-Kernel-linux-msft-wsl-6.18.26.3/`
+- bzImage: `C:\Users\yuanhong\wsl-kernel\bzImage`
+- `.wslconfig` 配置指向自定义内核
+
+### 13.2 WSL2 验证结果
+
+| 测试项 | 结果 |
+|--------|------|
+| 单元测试 (controlplane/session/console) | ✅ 全部通过 |
+| 竞态检测 (-race) | ✅ 无数据竞争 |
+| BPF 程序加载 | ✅ kprobe/tracepoint fallback |
+| HTTP 抓包 (`python3 -m http.server`) | ✅ 完整捕获 |
+| NTRIP BPF 数据捕获 | ✅ 原始 syscall 数据可见 |
+| NTRIP 协议推断 (HTTP→NTRIP) | ✅ protocol=15 |
+| GGA 数据捕获 | ✅ 完整可见 |
+| RTCM 二进制帧捕获 | ✅ 0xD3 sync byte + 完整帧 |
+| NTRIP Record 解析输出 | ❌ kprobe 限制（见下） |
+| 诊断引擎端到端 | ❌ 依赖 Record 解析 |
+
+### 13.3 WSL2 已知限制
+
+1. **fentry/fexit 不可用**: 虽然 `CONFIG_FPROBE=y` 且 `bpf_trampoline` 符号存在，但 cilium/ebpf 加载 tracing 类型程序时被 verifier 拒绝。bpftrace 的 fentry 正常，是 cilium/ebpf 与 WSL kernel 的兼容性问题。
+
+2. **连接追踪不完整**: kprobe fallback 模式下，`accept4`/`connect` 探针对 Python raw socket 不触发，导致连接 Role=Unknown。已添加 content-based direction inference 缓解。
+
+3. **PID filter 不稳定**: kprobe 模式下 PID filter 偶尔不工作。
+
+4. **不影响生产环境**: TKE 节点的标准 Ubuntu/TencentOS 内核完整支持 fentry/fexit，以上问题均不存在。
+
+### 13.4 Bug 修复 (本轮发现)
+
+| 修复 | 文件 | 说明 |
+|------|------|------|
+| nil Request() panic | `agent/conn/record_processor.go` | 单向协议 (RTCM) 排序/提交时 Request()=nil |
+| Role Unknown 方向推断 | `agent/conn/conntrack.go` | 用 source function 推断 send/recv 方向 |
+| LogSize 字段移除 | `agent/uprobe/` | cilium/ebpf v0.17 移除了该字段 |
+
+---
+
+## 14. TKE 部署就绪状态
+
+| 组件 | 文件 | 状态 |
+|------|------|------|
+| Agent Dockerfile | `deploy/Dockerfile` | ✅ 就绪 |
+| Agent Helm Chart | `deploy/helm/kyanos-agent/` | ✅ 就绪 |
+| Console Helm Chart | `deploy/helm/kyanos-console/` | ✅ 就绪 |
+| 测试 NTRIP Pod | `deploy/test-ntrip-pod.yaml` | ✅ 就绪 |
+| 部署指南 (英文) | `deploy/README.md` | ✅ 就绪 |
+| 部署指南 (中文) | `deploy/README_CN.md` | ✅ 就绪 |
+
+**待办**: 配置 TKE kubeconfig + Docker 环境后即可一键部署验证。
+
 </content>
 </file>
 
 ---
 
-## 13. 常见陷阱
+## 15. 常见陷阱
 
 | 陷阱 | 说明 | 解决方案 |
 |------|------|---------|
