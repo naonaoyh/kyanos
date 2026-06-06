@@ -1,6 +1,6 @@
 # Kyanos GNSS 专项开发 — 交接文档
 
-> 最后更新: 2026-06-05 (WSL2 验证 + Bug 修复 + TUI 诊断 + PCAP/COS + WebSocket 实时推送)
+> 最后更新: 2026-06-06 (Agent 集成测试修复: TUI 卡死 + 除零 + 内核版本检测)
 > 分支: `feat/gnss-ntrip-rtcm-support`
 > 仓库: `https://github.com/naonaoyh/kyanos.git`
 > 上游: `https://github.com/hengyoush/kyanos` (原始 Kyanos 项目)
@@ -111,8 +111,8 @@ Phase 5 包含 6 个排障场景 (S1-S6) + 诊断评分 + CLI 集成:
 ### 4.1 Git 状态
 
 - **分支**: `feat/gnss-ntrip-rtcm-support`
-- **最近提交**: `bc0c174 feat: add NTRIP v1/v2 and RTCM 3.2 GNSS protocol support` (Phase 1-4)
-- **未提交变更**: Phase 5 所有新增代码均未提交 (用户要求 "暂时不用提交")
+- **最近提交**: `54551ce fix(test): resolve agent integration test hangs and kernel version detection`
+- **未提交变更**: ntrip filter/struct 微调, run_quick_test.sh 改进 (非关键)
 
 ### 4.2 未提交的文件变更
 
@@ -533,9 +533,9 @@ GOOS=linux go test -c ./agent/controlplane/    # ✅ compiles
 
 ### 13.3 WSL2 已知限制
 
-1. **fentry/fexit 不可用**: 虽然 `CONFIG_FPROBE=y` 且 `bpf_trampoline` 符号存在，但 cilium/ebpf 加载 tracing 类型程序时被 verifier 拒绝。bpftrace 的 fentry 正常，是 cilium/ebpf 与 WSL kernel 的兼容性问题。
+1. **fentry/fexit 现已可用** (2026-06-06 修复): 修复了内核版本字符串比较 bug 后，fentry/fexit 程序在 WSL2 6.18 内核上可以正常 attach。但连接事件 (ConnRb perf buffer) 仍然无法产生，可能是 BPF C 代码与 6.18 内核结构的兼容性问题。
 
-2. **连接追踪不完整**: kprobe fallback 模式下，`accept4`/`connect` 探针对 Python raw socket 不触发，导致连接 Role=Unknown。已添加 content-based direction inference 缓解。
+2. **连接追踪不完整**: 即使 fentry/fexit 成功 attach，WSL2 上 agent 集成测试仍无法捕获连接事件 ("no conn event")。TCP 流量正常但 BPF 未生成 AgentConnEvtT。
 
 3. **PID filter 不稳定**: kprobe 模式下 PID filter 偶尔不工作。
 
@@ -713,3 +713,87 @@ GOOS=linux go test -c ./agent/controlplane/    # ✅ compiles
 | `eb49f37` | feat(cos): COS cloud storage auto-upload |
 | `af4a3a7` | feat(ui): SessionDetail real-time enhancements |
 | `0d5cfff` | feat(ui): Topology/Alerts/Report real-time updates |
+
+---
+
+## 19. Agent 集成测试调试与三项关键修复 (2026-06-06)
+
+### 19.1 问题背景
+
+尝试在 WSL2 (Ubuntu 26.04, 自定义 6.18.26.3 内核) 上运行 `agent/agent_test.go` 的 23 个集成测试时，所有测试均超时 (192s) 被 kill，无任何有效输出。
+
+### 19.2 排障过程
+
+1. **BPF 隔离测试** (`agent/bpf_smoke_test.go`): 单独测试 BPF 加载 — **PASS** (81 programs, 40 maps, ~10s)。排除 BPF 加载问题。
+2. **SetupAgent 分步诊断** (`agent/setup_steps_test.go`): 逐步执行 SetupAgent 的 9 个前置步骤 — 全部在 1.4s 内完成。排除前置步骤问题。
+3. **完整流程分析**: 发现卡死发生在 BPF 加载**之后**，具体在 `RunWatchRender` 调用 `tea.NewProgram().Run()` 时。
+
+### 19.3 根因与修复
+
+#### Bug 1: TUI 在非交互终端永久阻塞 (commit 54551ce)
+
+| 项 | 详情 |
+|---|------|
+| **症状** | 所有 23 个测试在 "256 colors" 警告后完全无输出，超时 192s |
+| **根因** | `StartAgent0` (agent_utils_test.go) 创建 `AgentOptions` 时未设置 `WatchOptions`，导致 `UseTui()` 返回 `true`。`RunWatchRender` 启动 bubbletea TUI 完整渲染 (`tea.NewProgram().Run()`)，在非交互终端环境中永久阻塞 |
+| **修复** | `agent/agent_utils_test.go` 添加 `WatchOptions: watch.WatchOptions{DebugOutput: true}` |
+| **影响** | `UseTui()` 返回 `false`，跳过 TUI 渲染，进入 DebugOutput 日志模式 |
+
+#### Bug 2: PerfEventMapPageNum 除零 (commit 54551ce)
+
+| 项 | 详情 |
+|---|------|
+| **症状** | TUI 修复后测试暴露 `panic: integer divide by zero` in `PullSyscallDataEvents` (bpf/events.go:145) |
+| **根因** | `SyscallPerfEventMapPageNum` 等 5 个参数的默认值仅在 CLI cobra flags (`cmd/root.go`) 中设置。测试直接构造 `AgentOptions` 时这些字段为零值，导致 `perCPUBuffer = 0`，`eventSize / perCPUBuffer` 触发除零 |
+| **修复** | `agent/common/options.go` 的 `ValidateAndRepairOptions` 中添加 5 个默认值: Syscall=2048, SSL=512, Conn=4, Kern=32, FirstPacket=4 |
+
+#### Bug 3: 内核版本字符串比较 (commit 54551ce)
+
+| 项 | 详情 |
+|---|------|
+| **症状** | WSL2 6.18 内核被匹配到 "5.8.0" profile (无 fentry)，导致 fentry/fexit 程序被替换为 stub kprobe，attach 时报 `invalid program type Kprobe, expected Tracing` |
+| **根因** | `KernelVersionsMap` TreeMap 使用字典序字符串比较 (`cmp.Compare(string, string)`)。`Floor("6.18.26")` 在字典序下返回 `"5.8.0"` 而非 `"5.15.0"` (因为 `"5.8" > "5.15"` 字符串比较中 `'8' > '1'`) |
+| **修复** | `agent/compatible/type.go`: (1) 新增 `compareSemver()` 函数做数值语义版本比较；(2) TreeMap 比较器改用 `compareSemver`；(3) `GetBestMatchedKernelVersion` 添加 fallback — 当输入主版本号大于匹配结果时，使用最高已知 profile |
+
+### 19.4 修复效果
+
+| 指标 | 修复前 | 修复后 |
+|------|--------|--------|
+| 测试完成时间 | 192s (超时 kill) | ~22s (正常完成) |
+| BPF 加载 | 成功但 fentry 被错误替换为 stub | 成功 + fentry/fexit 正常 attach |
+| 内核版本检测 | "5.8.0" (无 fentry) | "5.15.0" (完整 fentry 支持) |
+| Agent 初始化 | TUI 永久阻塞 | DebugOutput 模式，无阻塞 |
+
+### 19.5 WSL2 6.18 内核遗留问题
+
+修复后测试能正常运行到结束，但所有连接级测试 (TestConnectSyscall, TestAccept, TestWrite 等) 均报 "no conn event" — TCP 流量正常传输 (echo server/HTTP 请求均成功)，BPF 程序成功 attach，但 ConnRb perf buffer 中无事件产生。
+
+**可能原因**:
+- WSL2 自定义 6.18 内核的 BPF tracing 程序与连接事件生成逻辑存在兼容性差异
+- 连接事件的生成可能依赖 BPF C 代码中的某些内核结构偏移，CO-RE 重定位在 6.18 上可能存在细微差异
+- 此问题**不影响**原生 Linux 环境 (如 TKE Ubuntu/TencentOS) 的部署
+
+### 19.6 新增诊断文件
+
+| 文件 | 说明 |
+|------|------|
+| `agent/bpf_smoke_test.go` | BPF 加载隔离测试 (TestBPFSmokeTest + TestAgentPreBPFInit) |
+| `agent/setup_steps_test.go` | SetupAgent 分步诊断测试 (TestSetupAgentSteps) |
+
+### 19.7 测试运行方法
+
+```bash
+# WSL2 环境中运行 (需要 sudo)
+export PATH="/usr/local/go/bin:$PATH"
+
+# 单个快速测试
+sudo go test -v -count=1 -timeout 60s -run "^TestConnectSyscall$" ./agent/
+
+# BPF 冒烟测试
+sudo go test -v -count=1 -timeout 30s -run "^TestBPFSmokeTest$" ./agent/
+
+# 全量测试 (预计大部分会因 "no conn event" 失败)
+sudo go test -v -count=1 -timeout 600s ./agent/
+```
+
+> **注意**: WSL2 中 sudo 执行时 PATH 会被重置，需通过 `sudo bash -c "export PATH=... && ..."` 或 `sudo env "PATH=$PATH" ...` 传递。`sudo -E` 在 Ubuntu 26.04 上被忽略 ("preserving the entire environment is not supported")。
