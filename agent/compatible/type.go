@@ -6,6 +6,7 @@ import (
 	"kyanos/bpf"
 	"kyanos/common"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/emirpasic/gods/maps/treemap"
@@ -122,13 +123,58 @@ func GetBestMatchedKernelVersion(version string) KernelVersion {
 			return KernelVersion{}
 		}
 	} else {
+		// Fix for string-based TreeMap comparison: lexicographic ordering causes
+		// "6.x" to be less than "5.8.0" (because '6' > '5' but "5.8" > "5.15").
+		// Floor("6.18") returns "5.8.0" instead of the correct "5.15.0".
+		// When the input major version is greater than the matched key's major,
+		// use the highest known version profile (which has the most capabilities).
+		inputMajor := version
+		if idx := strings.Index(version, "."); idx > 0 {
+			inputMajor = version[:idx]
+		}
+		matchedMajor := foundKey.(string)
+		if idx := strings.Index(matchedMajor, "."); idx > 0 {
+			matchedMajor = matchedMajor[:idx]
+		}
+		if inputMajor > matchedMajor {
+			maxKey, _ := KernelVersionsMap.Max()
+			if maxKey != nil {
+				log.Debugf("Kernel %s is newer than all known versions (max=%s), using highest profile: %s",
+					version, maxKey, maxKey.(string))
+				val, _ := KernelVersionsMap.Get(maxKey)
+				return val.(KernelVersion)
+			}
+		}
 		return foundValue.(KernelVersion)
 	}
 }
 
+// compareSemver performs numeric semantic version comparison (e.g. "5.15.0" < "6.18.26").
+func compareSemver(a, b string) int {
+	pa := strings.SplitN(a, ".", 4)
+	pb := strings.SplitN(b, ".", 4)
+	maxLen := len(pa)
+	if len(pb) > maxLen {
+		maxLen = len(pb)
+	}
+	for i := 0; i < maxLen; i++ {
+		var na, nb int
+		if i < len(pa) {
+			na, _ = strconv.Atoi(pa[i])
+		}
+		if i < len(pb) {
+			nb, _ = strconv.Atoi(pb[i])
+		}
+		if na != nb {
+			return cmp.Compare(na, nb)
+		}
+	}
+	return 0
+}
+
 func init() {
 	KernelVersionsMap = treemap.NewWith(func(a, b interface{}) int {
-		return cmp.Compare(a.(string), b.(string))
+		return compareSemver(a.(string), b.(string))
 	})
 
 	baseVersion := KernelVersion{

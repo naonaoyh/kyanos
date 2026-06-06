@@ -285,6 +285,21 @@ func ValidateAndRepairOptions(options AgentOptions) (AgentOptions, error) {
 	if newOptions.PerfEventBufferSizeForEvent <= 0 {
 		newOptions.PerfEventBufferSizeForEvent = perfEventControlBufferSize
 	}
+	if newOptions.SyscallPerfEventMapPageNum <= 0 {
+		newOptions.SyscallPerfEventMapPageNum = 2048
+	}
+	if newOptions.SslPerfEventMapPageNum <= 0 {
+		newOptions.SslPerfEventMapPageNum = 512
+	}
+	if newOptions.ConnPerfEventMapPageNum <= 0 {
+		newOptions.ConnPerfEventMapPageNum = 4
+	}
+	if newOptions.KernPerfEventMapPageNum <= 0 {
+		newOptions.KernPerfEventMapPageNum = 32
+	}
+	if newOptions.FirstPacketEventMapPageNum <= 0 {
+		newOptions.FirstPacketEventMapPageNum = 4
+	}
 	// gRPC control-plane mode is opt-in (additive, not replacing). An empty
 	// GRPCServer keeps the Agent in Standalone_CLI_Mode and must NOT be
 	// rejected. Only validate the address when it is non-empty; an invalid

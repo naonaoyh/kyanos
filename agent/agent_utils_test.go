@@ -12,6 +12,7 @@ import (
 	ac "kyanos/agent/common"
 	"kyanos/agent/compatible"
 	"kyanos/agent/conn"
+	"kyanos/agent/render/watch"
 	"kyanos/bpf"
 	"kyanos/cmd"
 	"kyanos/common"
@@ -72,6 +73,9 @@ func StartAgent0(bpfAttachFunctions []bpf.AttachBpfProgFunction,
 		agent.SetupAgent(ac.AgentOptions{
 			Stopper:                agentStopper,
 			LoadBpfProgramFunction: loadBpfProgramFunction,
+			WatchOptions: watch.WatchOptions{
+				DebugOutput: true,
+			},
 			CustomSyscallEventHook: func(evt *bpf.SyscallEventData) {
 				if syscallEventList != nil {
 					*syscallEventList = append(*syscallEventList, *evt)
