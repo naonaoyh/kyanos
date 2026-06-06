@@ -436,6 +436,17 @@ func (f NTRIPFilter) filterRequest(req *NTRIPRequest) bool {
 		return false
 	}
 
+	// Extension-only mode: if no standard request-side criteria are set but
+	// extension features (brute-force, reconnect, kick) are enabled, return
+	// false so the extension checks in Filter() make the capture decision.
+	if len(f.TargetVersions) == 0 && len(f.TargetSessionTypes) == 0 &&
+		len(f.TargetMountPoints) == 0 && len(f.TargetMethods) == 0 &&
+		len(f.TargetUsernames) == 0 {
+		if f.BruteEnable || f.ReconnectEnable || f.KickEnable {
+			return false
+		}
+	}
+
 	return true
 }
 

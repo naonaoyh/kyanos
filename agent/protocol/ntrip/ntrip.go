@@ -152,10 +152,11 @@ type NTRIPRTCMFrame struct {
 	ClientIP   string
 	ClientPort uint16
 	ConnKey    string
-	isReq      bool
+	isResp     bool // when true, this frame is on the response side of a record
 }
 
-func (f *NTRIPRTCMFrame) IsReq() bool                 { return false }
+func (f *NTRIPRTCMFrame) IsReq() bool                 { return !f.isResp }
+func (f *NTRIPRTCMFrame) SetIsResp(v bool)             { f.isResp = v }
 func (f *NTRIPRTCMFrame) StreamId() protocol.StreamId { return 0 }
 
 func (f *NTRIPRTCMFrame) FormatToString() string {
