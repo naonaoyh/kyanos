@@ -71,10 +71,10 @@ onUnmounted(() => {
         <el-icon><Monitor /></el-icon>
         <span>TUI {{ tuiEnabled ? 'ON' : 'OFF' }}</span>
         <el-switch
-          v-model="tuiEnabled"
+          :model-value="tuiEnabled"
           size="small"
           @click.stop
-          @change="toggleTUI"
+          @update:model-value="toggleTUI"
         />
       </div>
       <div class="health-bar" v-if="health">
