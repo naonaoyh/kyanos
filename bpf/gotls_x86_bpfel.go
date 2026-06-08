@@ -8,11 +8,13 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
 
 type GoTlsGoCommonSymaddrsT struct {
+	_                     structs.HostLayout
 	InternalSyscallConn   int64
 	TlsConn               int64
 	NetTCPConn            int64
@@ -25,6 +27,7 @@ type GoTlsGoCommonSymaddrsT struct {
 }
 
 type GoTlsGoTlsSymaddrsT struct {
+	_               structs.HostLayout
 	WriteC_loc      GoTlsLocationT
 	WriteB_loc      GoTlsLocationT
 	WriteRetval0Loc GoTlsLocationT
@@ -36,6 +39,7 @@ type GoTlsGoTlsSymaddrsT struct {
 }
 
 type GoTlsLocationT struct {
+	_      structs.HostLayout
 	Type   GoTlsLocationTypeT
 	Offset int32
 }

@@ -955,7 +955,10 @@ static  __always_inline bool filter_conn_info(struct conn_info_t *conn_info) {
 	return true;
 }
 static __always_inline bool create_conn_info(void* ctx, struct conn_info_t *conn_info, uint64_t tgid_fd, const struct sock_key *key, enum endpoint_role_t role, uint64_t start_ts) {
-	if (should_trace_conn(conn_info) && filter_conn_info(conn_info) && conn_info->laddr.in6.sin6_port != 0) {
+	bool st = should_trace_conn(conn_info);
+	bool fc = filter_conn_info(conn_info);
+	bool lp = conn_info->laddr.in6.sin6_port != 0;
+	if (st && fc && lp) {
 		
 		bpf_map_update_elem(&conn_info_map, &tgid_fd, conn_info, BPF_ANY);
 		struct conn_id_s_t conn_id_s = {};

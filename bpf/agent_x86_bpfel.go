@@ -8,11 +8,13 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
 
 type AgentConnEvtT struct {
+	_        structs.HostLayout
 	ConnInfo AgentConnInfoT
 	ConnType AgentConnTypeT
 	_        [4]byte
@@ -20,14 +22,18 @@ type AgentConnEvtT struct {
 }
 
 type AgentConnIdS_t struct {
+	_       structs.HostLayout
 	TgidFd  uint64
 	NoTrace AgentConnTraceStateT
 	_       [4]byte
 }
 
 type AgentConnInfoT struct {
+	_      structs.HostLayout
 	ConnId struct {
+		_    structs.HostLayout
 		Upid struct {
+			_              structs.HostLayout
 			Pid            uint32
 			_              [4]byte
 			StartTimeTicks uint64
@@ -41,7 +47,9 @@ type AgentConnInfoT struct {
 	SslReadBytes  uint64
 	SslWriteBytes uint64
 	Laddr         struct {
+		_   structs.HostLayout
 		In6 struct {
+			_            structs.HostLayout
 			Sin6Family   uint16
 			Sin6Port     uint16
 			Sin6Flowinfo uint32
@@ -50,7 +58,9 @@ type AgentConnInfoT struct {
 		}
 	}
 	Raddr struct {
+		_   structs.HostLayout
 		In6 struct {
+			_            structs.HostLayout
 			Sin6Family   uint16
 			Sin6Port     uint16
 			Sin6Flowinfo uint32
@@ -112,6 +122,7 @@ const (
 )
 
 type AgentFirstPacketEvt struct {
+	_       structs.HostLayout
 	Ts      uint64
 	Len     uint32
 	Flags   uint8
@@ -121,9 +132,16 @@ type AgentFirstPacketEvt struct {
 	Key     AgentSockKey
 }
 
-type AgentIn6Addr struct{ In6U struct{ U6Addr8 [16]uint8 } }
+type AgentIn6Addr struct {
+	_    structs.HostLayout
+	In6U struct {
+		_       structs.HostLayout
+		U6Addr8 [16]uint8
+	}
+}
 
 type AgentKernEvt struct {
+	_                   structs.HostLayout
 	FuncName            [16]int8
 	Ts                  uint64
 	TsDelta             uint32
@@ -140,6 +158,7 @@ type AgentKernEvt struct {
 }
 
 type AgentKernEvtData struct {
+	_       structs.HostLayout
 	Ke      AgentKernEvt
 	BufSize uint32
 	Msg     [30720]int8
@@ -147,6 +166,7 @@ type AgentKernEvtData struct {
 }
 
 type AgentKernEvtSslData struct {
+	_          structs.HostLayout
 	Ke         AgentKernEvt
 	SyscallSeq uint32
 	SyscallLen uint32
@@ -155,11 +175,18 @@ type AgentKernEvtSslData struct {
 	_          [4]byte
 }
 
-type AgentProcessExecEvent struct{ Pid int32 }
+type AgentProcessExecEvent struct {
+	_   structs.HostLayout
+	Pid int32
+}
 
-type AgentProcessExitEvent struct{ Pid int32 }
+type AgentProcessExitEvent struct {
+	_   structs.HostLayout
+	Pid int32
+}
 
 type AgentSockKey struct {
+	_     structs.HostLayout
 	Sip   [2]uint64
 	Dip   [2]uint64
 	Sport uint16

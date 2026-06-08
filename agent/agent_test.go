@@ -61,7 +61,7 @@ func TestConnectSyscall(t *testing.T) {
 		connType:         bpf.AgentConnTypeTKConnect,
 		throw:            true})[0]
 	AssertConnEvent(t, connectEvent, ConnEventAssertions{
-		expectPid:             uint32(os.Getpid()),
+		expectPid:             getExpectedPid(),
 		expectRemotePort:      80,
 		expectLocalAddrFamily: common.AF_INET,
 		expectRemoteFamily:    common.AF_INET,
@@ -103,7 +103,7 @@ func TestCloseSyscall(t *testing.T) {
 		connType:         bpf.AgentConnTypeTKClose,
 		throw:            true})[0]
 	AssertConnEvent(t, connectEvent, ConnEventAssertions{
-		expectPid:                  uint32(os.Getpid()),
+		expectPid:                  getExpectedPid(),
 		expectRemotePort:           80,
 		expectLocalAddrFamily:      common.AF_INET,
 		expectRemoteFamily:         common.AF_INET,
@@ -153,7 +153,7 @@ func TestAccept(t *testing.T) {
 		connType:        bpf.AgentConnTypeTKConnect,
 		throw:           true})[0]
 	AssertConnEvent(t, connectEvent, ConnEventAssertions{
-		expectPid:                  uint32(os.Getpid()),
+		expectPid:                  getExpectedPid(),
 		expectRemotePort:           -1,
 		expectLocalAddrFamily:      common.AF_INET,
 		expectRemoteFamily:         common.AF_INET,
@@ -305,7 +305,7 @@ func TestRead(t *testing.T) {
 	AssertSyscallEventData(t, syscallEvent, SyscallDataEventAssertConditions{
 		KernDataEventAssertConditions: KernDataEventAssertConditions{
 			direct:           Ingress,
-			pid:              uint64(os.Getpid()),
+			pid:              getExpectedPidU64(),
 			fd:               uint32(conn.TgidFd),
 			funcName:         "syscall",
 			ignoreFuncName:   true,
@@ -366,7 +366,7 @@ func TestRecvFrom(t *testing.T) {
 	AssertSyscallEventData(t, syscallEvent, SyscallDataEventAssertConditions{
 		KernDataEventAssertConditions: KernDataEventAssertConditions{
 			direct:           Ingress,
-			pid:              uint64(os.Getpid()),
+			pid:              getExpectedPidU64(),
 			fd:               uint32(conn.TgidFd),
 			funcName:         "syscall",
 			ignoreFuncName:   true,
@@ -431,7 +431,7 @@ func TestReadv(t *testing.T) {
 		AssertSyscallEventData(t, syscallEvent, SyscallDataEventAssertConditions{
 			KernDataEventAssertConditions: KernDataEventAssertConditions{
 				direct:           Ingress,
-				pid:              uint64(os.Getpid()),
+				pid:              getExpectedPidU64(),
 				fd:               uint32(conn.TgidFd),
 				funcName:         "syscall",
 				ignoreFuncName:   true,
@@ -498,7 +498,7 @@ func TestRecvmsg(t *testing.T) {
 		AssertSyscallEventData(t, syscallEvent, SyscallDataEventAssertConditions{
 			KernDataEventAssertConditions: KernDataEventAssertConditions{
 				direct:           Ingress,
-				pid:              uint64(os.Getpid()),
+				pid:              getExpectedPidU64(),
 				fd:               uint32(conn.TgidFd),
 				ignoreFuncName:   true,
 				funcName:         "syscall",
@@ -751,7 +751,7 @@ func TestWrite(t *testing.T) {
 	AssertSyscallEventData(t, syscallEvent, SyscallDataEventAssertConditions{
 		KernDataEventAssertConditions: KernDataEventAssertConditions{
 			direct:           Egress,
-			pid:              uint64(os.Getpid()),
+			pid:              getExpectedPidU64(),
 			fd:               uint32(conn.TgidFd),
 			funcName:         "syscall",
 			ignoreFuncName:   true,
@@ -812,7 +812,7 @@ func TestSendto(t *testing.T) {
 	AssertSyscallEventData(t, syscallEvent, SyscallDataEventAssertConditions{
 		KernDataEventAssertConditions: KernDataEventAssertConditions{
 			direct:           Egress,
-			pid:              uint64(os.Getpid()),
+			pid:              getExpectedPidU64(),
 			fd:               uint32(conn.TgidFd),
 			funcName:         "syscall",
 			ignoreFuncName:   true,
@@ -875,7 +875,7 @@ func TestWritev(t *testing.T) {
 		AssertSyscallEventData(t, syscallEvent, SyscallDataEventAssertConditions{
 			KernDataEventAssertConditions: KernDataEventAssertConditions{
 				direct:           Egress,
-				pid:              uint64(os.Getpid()),
+				pid:              getExpectedPidU64(),
 				fd:               uint32(conn.TgidFd),
 				funcName:         "syscall",
 				ignoreFuncName:   true,
@@ -939,7 +939,7 @@ func TestSendMsg(t *testing.T) {
 	for index, syscallEvent := range syscallEvents {
 		AssertSyscallEventData(t, syscallEvent, SyscallDataEventAssertConditions{
 			KernDataEventAssertConditions: KernDataEventAssertConditions{direct: Egress,
-				pid:              uint64(os.Getpid()),
+				pid:              getExpectedPidU64(),
 				fd:               uint32(conn.TgidFd),
 				ignoreFuncName:   true,
 				funcName:         "syscall",
@@ -976,7 +976,7 @@ func TestIpXmit(t *testing.T) {
 		}, KernDataEventAssertConditions{
 
 			direct:           Egress,
-			pid:              uint64(os.Getpid()),
+			pid:              getExpectedPidU64(),
 			funcName:         "ip_queue_xmit",
 			ignoreFuncName:   true,
 			seq:              1,
@@ -1010,7 +1010,7 @@ func TestDevQueueXmit(t *testing.T) {
 		}, KernDataEventAssertConditions{
 
 			direct:           Egress,
-			pid:              uint64(os.Getpid()),
+			pid:              getExpectedPidU64(),
 			funcName:         "dev_queue_xmit",
 			ignoreFuncName:   true,
 			seq:              1,
@@ -1045,7 +1045,7 @@ func TestDevHardStartXmit(t *testing.T) {
 		}, KernDataEventAssertConditions{
 
 			direct:           Egress,
-			pid:              uint64(os.Getpid()),
+			pid:              getExpectedPidU64(),
 			funcName:         "dev_hard_start",
 			ignoreFuncName:   true,
 			seq:              1,
@@ -1083,7 +1083,7 @@ func TestTracepointNetifReceiveSkb(t *testing.T) {
 		}, KernDataEventAssertConditions{
 
 			direct:            Ingress,
-			pid:               uint64(os.Getpid()),
+			pid:               getExpectedPidU64(),
 			funcName:          "netif_receive_skb",
 			ignoreFuncName:    true,
 			seq:               1,
@@ -1126,7 +1126,7 @@ func TestIpRcvCore(t *testing.T) {
 		}, KernDataEventAssertConditions{
 
 			direct:            Ingress,
-			pid:               uint64(os.Getpid()),
+			pid:               getExpectedPidU64(),
 			funcName:          "ip_rcv_core",
 			ignoreFuncName:    true,
 			seq:               1,
@@ -1166,7 +1166,7 @@ func TestTcpV4DoRcv(t *testing.T) {
 		}, KernDataEventAssertConditions{
 
 			direct:            Ingress,
-			pid:               uint64(os.Getpid()),
+			pid:               getExpectedPidU64(),
 			funcName:          "tcp_v4_do_rcv",
 			ignoreFuncName:    true,
 			seq:               1,
@@ -1206,7 +1206,7 @@ func TestSkbCopyDatagramIter(t *testing.T) {
 		}, KernDataEventAssertConditions{
 
 			direct:            Ingress,
-			pid:               uint64(os.Getpid()),
+			pid:               getExpectedPidU64(),
 			funcName:          "skb_copy_datagr",
 			ignoreFuncName:    true,
 			seq:               1,

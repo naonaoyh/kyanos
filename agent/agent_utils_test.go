@@ -14,6 +14,7 @@ import (
 	"kyanos/agent/conn"
 	"kyanos/agent/render/watch"
 	"kyanos/bpf"
+	"kyanos/bpf/loader"
 	"kyanos/cmd"
 	"kyanos/common"
 	"log"
@@ -34,6 +35,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sys/unix"
 )
+
+// getExpectedPid returns the PID that should appear in BPF events.
+// On WSL2, bpf_get_current_pid_tgid() returns a different PID than os.Getpid().
+// After the agent starts, the detected BPF-visible PID is available via loader.GetBpfVisiblePid().
+func getExpectedPid() uint32 {
+	if loader.IsWSL2() {
+		bpfPid := loader.GetBpfVisiblePid()
+		if bpfPid != 0 {
+			return bpfPid
+		}
+	}
+	return uint32(os.Getpid())
+}
+
+// getExpectedPidU64 is a uint64 version of getExpectedPid for kern event assertions.
+func getExpectedPidU64() uint64 {
+	return uint64(getExpectedPid())
+}
 
 func StartAgent0(bpfAttachFunctions []bpf.AttachBpfProgFunction,
 	connEventList *[]bpf.AgentConnEvtT,

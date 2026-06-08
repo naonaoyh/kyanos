@@ -231,6 +231,17 @@ func AgentObjectsFromLagacyKernel310(legacy *bpf.AgentLagacyKernel310Objects) *b
 	return ret
 }
 
+// FilterFunctionsForTest exports filterFunctions for testing
+func FilterFunctionsForTest(coll *ebpf.CollectionSpec, kv compatible.KernelVersion) error {
+	filterFunctions(coll, kv)
+	return nil
+}
+
+// GetCurrentKernelVersion exports the kernel version detection for testing
+func GetCurrentKernelVersion() compatible.KernelVersion {
+	return compatible.GetCurrentKernelVersion()
+}
+
 func filterFunctions(coll *ebpf.CollectionSpec, kernelVersion compatible.KernelVersion) {
 	finalCProgNames := make([]string, 0)
 
@@ -295,13 +306,35 @@ func setAndValidateParameters(ctx context.Context, options *ac.AgentOptions) boo
 		common.AgentLog.Infoln("filter for remote pids: ", targetPids)
 		one := int64(1)
 		controlValues.Update(bpf.AgentControlValueIndexTKEnableFilterByPid, one, ebpf.UpdateAny)
+
+		// On WSL2, bpf_get_current_pid_tgid() returns a different PID than
+		// what userspace sees via getpid(). We need to detect the BPF-visible
+		// PID and use it in the filter map.
+		wsl2Mode := isWSL2()
+		if wsl2Mode {
+			common.AgentLog.Infoln("WSL2 detected: enabling BPF-visible PID translation")
+		}
+
 		for _, each := range targetPids {
 			pidInt, err := strconv.Atoi(each)
 			if err != nil {
 				common.AgentLog.Errorf("Invalid pid : %s\n", each)
 				return false
 			}
-			err = filterPidMap.Update(uint32(pidInt), int8(one), ebpf.UpdateAny)
+
+			filterPid := uint32(pidInt)
+
+			if wsl2Mode {
+				detectedPid, detectErr := detectBpfVisiblePid()
+				if detectErr != nil {
+					common.AgentLog.Warnf("WSL2 PID detection failed for pid %d: %v, using original pid", pidInt, detectErr)
+				} else {
+					common.AgentLog.Infof("WSL2 PID translation: userspace pid %d -> BPF-visible pid %d", pidInt, detectedPid)
+					filterPid = detectedPid
+				}
+			}
+
+			err = filterPidMap.Update(filterPid, int8(one), ebpf.UpdateAny)
 			if err != nil {
 				common.AgentLog.Errorf("Failed update  FilterPidMap: %s\n", err)
 			}
