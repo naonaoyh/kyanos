@@ -309,10 +309,20 @@ func setAndValidateParameters(ctx context.Context, options *ac.AgentOptions) boo
 
 		// On WSL2, bpf_get_current_pid_tgid() returns a different PID than
 		// what userspace sees via getpid(). We need to detect the BPF-visible
-		// PID and use it in the filter map.
+		// PID once and use it for all filter map entries.
 		wsl2Mode := isWSL2()
+		var bpfVisiblePid uint32
+		var bpfPidDetected bool
 		if wsl2Mode {
 			common.AgentLog.Infoln("WSL2 detected: enabling BPF-visible PID translation")
+			detectedPid, detectErr := detectBpfVisiblePid()
+			if detectErr != nil {
+				common.AgentLog.Warnf("WSL2 PID detection failed: %v, using original pids", detectErr)
+			} else {
+				bpfVisiblePid = detectedPid
+				bpfPidDetected = true
+				common.AgentLog.Infof("WSL2 PID translation: BPF-visible pid = %d", bpfVisiblePid)
+			}
 		}
 
 		for _, each := range targetPids {
@@ -324,14 +334,8 @@ func setAndValidateParameters(ctx context.Context, options *ac.AgentOptions) boo
 
 			filterPid := uint32(pidInt)
 
-			if wsl2Mode {
-				detectedPid, detectErr := detectBpfVisiblePid()
-				if detectErr != nil {
-					common.AgentLog.Warnf("WSL2 PID detection failed for pid %d: %v, using original pid", pidInt, detectErr)
-				} else {
-					common.AgentLog.Infof("WSL2 PID translation: userspace pid %d -> BPF-visible pid %d", pidInt, detectedPid)
-					filterPid = detectedPid
-				}
+			if bpfPidDetected {
+				filterPid = bpfVisiblePid
 			}
 
 			err = filterPidMap.Update(filterPid, int8(one), ebpf.UpdateAny)

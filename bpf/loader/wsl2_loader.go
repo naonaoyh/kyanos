@@ -176,8 +176,17 @@ func detectBpfVisiblePid() (uint32, error) {
 		common.AgentLog.Debugf("WSL2 PID detection event: tgid=%d, tid=%d, comm=%s (our comm: %s)",
 			evt.Tgid, evt.Tid, commStr, procName)
 
-		// Match by comm name to find our process's BPF-visible TGID
-		if strings.Contains(procName, commStr) || strings.Contains(commStr, procName) {
+		// Match by comm name to find our process's BPF-visible TGID.
+		// BPF comm is max 15 chars. Use prefix match: compare the
+		// shorter name against the prefix of the longer one to avoid
+		// false positives (e.g. "kyanos" vs "kyanos-debug").
+		var match bool
+		if len(procName) <= len(commStr) {
+			match = commStr[:len(procName)] == procName
+		} else {
+			match = procName[:len(commStr)] == commStr
+		}
+		if match {
 			results = append(results, result{tgid: evt.Tgid, comm: commStr})
 		}
 
