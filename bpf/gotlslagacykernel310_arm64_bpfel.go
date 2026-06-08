@@ -8,11 +8,13 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
 
 type GoTlsLagacyKernel310GoCommonSymaddrsT struct {
+	_                     structs.HostLayout
 	InternalSyscallConn   int64
 	TlsConn               int64
 	NetTCPConn            int64
@@ -25,6 +27,7 @@ type GoTlsLagacyKernel310GoCommonSymaddrsT struct {
 }
 
 type GoTlsLagacyKernel310GoTlsSymaddrsT struct {
+	_               structs.HostLayout
 	WriteC_loc      GoTlsLagacyKernel310LocationT
 	WriteB_loc      GoTlsLagacyKernel310LocationT
 	WriteRetval0Loc GoTlsLagacyKernel310LocationT
@@ -36,6 +39,7 @@ type GoTlsLagacyKernel310GoTlsSymaddrsT struct {
 }
 
 type GoTlsLagacyKernel310LocationT struct {
+	_      structs.HostLayout
 	Type   GoTlsLagacyKernel310LocationTypeT
 	Offset int32
 }
