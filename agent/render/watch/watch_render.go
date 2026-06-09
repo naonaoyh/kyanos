@@ -434,9 +434,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				selected := m.table.SelectedRow()
 				if selected != nil {
 					idx, _ := strconv.Atoi(selected[0])
+					if idx < 1 || idx > len(*m.records) {
+						m.chosen = false
+						break
+					}
 					r := (*m.records)[idx-1]
 					line := strings.Repeat("+", m.viewport.Width)
 					timeDetail := ViewRecordTimeDetailAsFlowChart(r)
+
+					reqStr := "<no request>"
+					if r.Req != nil {
+						reqStr = c.TruncateString(r.Req.FormatToString(), m.options.MaxRecordContentDisplayBytes)
+					}
+					respStr := "<no response>"
+					if r.Resp != nil {
+						respStr = c.TruncateString(r.Resp.FormatToString(), m.options.MaxRecordContentDisplayBytes)
+					}
+
 					m.viewport.SetContent(
 						timeDetail + "\n" + line + "\n" +
 							r.String(common.AnnotatedRecordToStringOptions{
@@ -444,8 +458,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								MetricTypeSet:   common.MetricTypeSet{common.TotalDuration: true},
 								IncludeConnDesc: true,
 							}) + "\n" + line + "\n" +
-							"[Request]\n\n" + c.TruncateString(r.Req.FormatToString(), m.options.MaxRecordContentDisplayBytes) + "\n" + line +
-							"\n[Response]\n\n" + c.TruncateString(r.Resp.FormatToString(), m.options.MaxRecordContentDisplayBytes))
+							"[Request]\n\n" + reqStr + "\n" + line +
+							"\n[Response]\n\n" + respStr)
 				} else {
 					m.chosen = false
 					break
