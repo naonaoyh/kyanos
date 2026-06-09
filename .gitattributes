@@ -1,0 +1,7 @@
+# Ensure shell scripts always use LF line endings (required for Linux execution).
+# The executable bit itself is stored in the git index; set it with:
+#   git update-index --chmod=+x <file>
+# or for all .sh files at once:
+#   git ls-files "*.sh" | xargs git update-index --chmod=+x
+*.sh text eol=lf
+*.py text eol=lf
