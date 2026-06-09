@@ -6,8 +6,8 @@ BPFTOOL_SRC := $(abspath ./bpftool/src)
 BPFTOOL_OUTPUT ?= $(abspath $(OUTPUT)/bpftool)
 BPFTOOL ?= $(BPFTOOL_OUTPUT)/bootstrap/bpftool
 LIBBPF_OBJ := $(abspath $(OUTPUT)/libbpf.a)
-VMLINUX := ./vmlinux/$(ARCH)/vmlinux.h
-INCLUDES := -I$(OUTPUT) -I./libbpf/include/uapi -I$(dir $(VMLINUX))
+VMLINUX = ./vmlinux/$(ARCH)/vmlinux.h
+INCLUDES = -I$(OUTPUT) -I./libbpf/include/uapi -I$(dir $(VMLINUX))
 ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' \
 			 | sed 's/arm.*/arm/' \
 			 | sed 's/aarch64/arm64/' \

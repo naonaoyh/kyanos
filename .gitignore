@@ -38,3 +38,15 @@ eapm-ebpf
 kyanos
 
 dist/
+
+# Debug/diagnostic artifacts
+.diag_backup/
+.serena/
+.spec-workflow/
+.tmp/
+*.log
+check_version.sh
+diag_bpf.sh
+diag_test.sh
+run_smoke_test.sh
+tmp_script.sh

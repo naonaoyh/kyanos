@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -71,14 +70,9 @@ func IsWSL2() bool {
 	return isWSL2()
 }
 
-// isWSL2 checks if the current system is running WSL2
+// isWSL2 delegates to common.IsWSL() for a single source of truth.
 func isWSL2() bool {
-	data, err := os.ReadFile("/proc/version")
-	if err != nil {
-		return false
-	}
-	version := strings.ToLower(string(data))
-	return strings.Contains(version, "microsoft") || strings.Contains(version, "wsl")
+	return common.IsWSL()
 }
 
 type pidDetectEvent struct {

@@ -6,6 +6,7 @@ import (
 	"kyanos/agent/compatible"
 	"kyanos/agent/conn"
 	"kyanos/bpf"
+	"kyanos/bpf/loader"
 	"kyanos/common"
 	"os"
 	"testing"
@@ -165,6 +166,9 @@ func TestAccept(t *testing.T) {
 }
 
 func TestExistedConn(t *testing.T) {
+	if loader.IsWSL2() {
+		t.Skip("WSL2 cannot track pre-existing connections (BPF only sees connections established after attach)")
+	}
 	StartEchoTcpServerAndWait()
 	ip := "127.0.0.1"
 	sendMsg := "GET TestRead\n"
@@ -515,6 +519,9 @@ func TestRecvmsg(t *testing.T) {
 }
 
 func TestSslRead(t *testing.T) {
+	if loader.IsWSL2() {
+		t.Skip("WSL2 does not support SSL uprobes")
+	}
 	connEventList := make([]bpf.AgentConnEvtT, 0)
 	syscallEventList := make([]bpf.SyscallEventData, 0)
 	sslEventList := make([]bpf.SslData, 0)
@@ -571,6 +578,9 @@ func TestSslRead(t *testing.T) {
 }
 
 func TestSslEventsCanRelatedToKernEvents(t *testing.T) {
+	if loader.IsWSL2() {
+		t.Skip("WSL2 does not support SSL uprobes")
+	}
 	connEventList := make([]bpf.AgentConnEvtT, 0)
 	syscallEventList := make([]bpf.SyscallEventData, 0)
 	sslEventList := make([]bpf.SslData, 0)
@@ -657,6 +667,9 @@ func TestSslEventsCanRelatedToKernEvents(t *testing.T) {
 }
 
 func TestSslWrite(t *testing.T) {
+	if loader.IsWSL2() {
+		t.Skip("WSL2 does not support SSL uprobes")
+	}
 	connEventList := make([]bpf.AgentConnEvtT, 0)
 	syscallEventList := make([]bpf.SyscallEventData, 0)
 	sslEventList := make([]bpf.SslData, 0)

@@ -802,13 +802,17 @@ func (c *Connection4) progressIsStucked(sb *buffer.StreamBuffer) bool {
 		c.updateProgressTime(sb)
 		return false
 	}
+	maxStuckMs := int64(1000) // default
+	if ac.Options != nil {
+		maxStuckMs = int64(ac.Options.MaxAllowStuckTimeMills)
+	}
 	headTime, ok := sb.FindTimestampBySeq(uint64(sb.Position0()))
 	stuckDuration := time.Now().UnixMilli() - int64(common.NanoToMills(headTime))
-	if !ok || stuckDuration > int64(ac.Options.MaxAllowStuckTimeMills) {
+	if !ok || stuckDuration > maxStuckMs {
 		return true
 	}
 	if common.ConntrackLog.Level >= logrus.DebugLevel {
-		common.ConntrackLog.Debugf("%s stucked for %d ms, less than %d", c.ToString(), stuckDuration, ac.Options.MaxAllowStuckTimeMills)
+		common.ConntrackLog.Debugf("%s stucked for %d ms, less than %d", c.ToString(), stuckDuration, maxStuckMs)
 	}
 	return false
 }
@@ -817,10 +821,14 @@ func (c *Connection4) checkProgress(sb *buffer.StreamBuffer) bool {
 		c.updateProgressTime(sb)
 		return false
 	}
+	maxStuckMs := int64(1000) // default
+	if ac.Options != nil {
+		maxStuckMs = int64(ac.Options.MaxAllowStuckTimeMills)
+	}
 	headTime, ok := sb.FindTimestampBySeq(uint64(sb.Position0()))
 	now := time.Now().UnixMilli()
 	headTimeMills := int64(common.NanoToMills(headTime))
-	if !ok || now-headTimeMills > int64(ac.Options.MaxAllowStuckTimeMills) {
+	if !ok || now-headTimeMills > maxStuckMs {
 		sb.RemoveHead()
 		return true
 	} else {

@@ -350,28 +350,36 @@ func setAndValidateParameters(ctx context.Context, options *ac.AgentOptions) boo
 		controlValues.Update(bpf.AgentControlValueIndexTKEnableFilterByPid, one, ebpf.UpdateAny)
 
 		common.AgentLog.Infoln("filter for comm:", options.FilterComm)
-		processes, err := process.Processes()
-		if err != nil {
-			common.AgentLog.Errorf("Failed to get all processes: %s\n", err)
-			return false
-		}
-		var matchedPids []int32
-		for _, proc := range processes {
-			if isProcNameMacthed(proc, options.FilterComm) {
-				matchedPids = append(matchedPids, proc.Pid)
-			} else {
-				pn, _ := proc.Exe()
-				common.AgentLog.Debugf("Not matched: %s %s\n", pn, options.FilterComm)
-			}
-		}
 
-		common.AgentLog.Infof("Matched pids by command name: %v\n", matchedPids)
-
-		for _, matchedPid := range matchedPids {
-			err = filterPidMap.Update(uint32(matchedPid), int8(one), ebpf.UpdateAny)
+		// On WSL2, the initial process scan uses userspace PIDs from /proc,
+		// which don't match BPF-visible PIDs. Skip the scan and rely solely
+		// on the exec event path (below), which uses BPF-provided PIDs.
+		if !isWSL2() {
+			processes, err := process.Processes()
 			if err != nil {
-				common.AgentLog.Errorf("Failed update  FilterPidMap: %s\n", err)
+				common.AgentLog.Errorf("Failed to get all processes: %s\n", err)
+				return false
 			}
+			var matchedPids []int32
+			for _, proc := range processes {
+				if isProcNameMatched(proc, options.FilterComm) {
+					matchedPids = append(matchedPids, proc.Pid)
+				} else {
+					pn, _ := proc.Exe()
+					common.AgentLog.Debugf("Not matched: %s %s\n", pn, options.FilterComm)
+				}
+			}
+
+			common.AgentLog.Infof("Matched pids by command name: %v\n", matchedPids)
+
+			for _, matchedPid := range matchedPids {
+				err = filterPidMap.Update(uint32(matchedPid), int8(one), ebpf.UpdateAny)
+				if err != nil {
+					common.AgentLog.Errorf("Failed update  FilterPidMap: %s\n", err)
+				}
+			}
+		} else {
+			common.AgentLog.Warnln("WSL2: skipping initial FilterComm process scan (userspace PIDs incompatible with BPF). Exec event path will handle new processes.")
 		}
 		options.ProcessExecEventChannel = make(chan *bpf.AgentProcessExecEvent, 10)
 		go func() {
@@ -485,7 +493,7 @@ func setAndValidateParameters(ctx context.Context, options *ac.AgentOptions) boo
 	return true
 }
 
-func isProcNameMacthed(proc *process.Process, filterComm string) bool {
+func isProcNameMatched(proc *process.Process, filterComm string) bool {
 	procName, _ := proc.Name()
 	if procName == filterComm {
 		return true
@@ -511,7 +519,7 @@ func int8ArrayToCommStr(arr [16]int8) string {
 
 // isCommMatched checks if a BPF comm string matches the filterComm option.
 // It matches by exact name or if comm appears as a path suffix of filterComm,
-// consistent with the behavior of isProcNameMacthed.
+// consistent with the behavior of isProcNameMatched.
 func isCommMatched(comm string, filterComm string) bool {
 	if comm == filterComm {
 		return true
