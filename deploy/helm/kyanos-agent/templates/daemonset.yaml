@@ -58,6 +58,9 @@ spec:
             - "--grpc-ca"
             - {{ .Values.grpc.tls.caCert | quote }}
             {{- end }}
+            {{- if .Values.grpc.tls.insecureSkipVerify }}
+            - "--grpc-tls-insecure"
+            {{- end }}
             {{- end }}
             {{- range .Values.diagnostics.extraArgs }}
             - {{ . | quote }}

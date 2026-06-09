@@ -51,6 +51,9 @@ resources:
     memory: 1Gi
 
 # Storage for session data / diagnostics history
+# NOTE: persistence 使用 ReadWriteOnce 访问模式时，replicaCount 应设为 1，
+# 否则第二个副本将无法在非首个节点上挂载 PVC。如需多副本 + 持久化，
+# 请使用 ReadWriteMany 存储类（如 CFS / NFS）。
 persistence:
   enabled: false
   storageClass: ""

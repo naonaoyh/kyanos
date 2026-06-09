@@ -24,6 +24,7 @@ K8S_NAMESPACE="kyanos-system"
 CCR_USER=""
 CCR_PASS=""
 SKIP_BUILD=false
+SKIP_PREFLIGHT=false
 CONSOLE_REPLICAS=2
 
 usage() {
@@ -42,6 +43,7 @@ Optional:
   --ccr-user USER           CCR 用户名（创建 imagePullSecret）
   --ccr-pass PASS           CCR 密码
   --skip-build              跳过镜像构建（使用已推送的镜像）
+  --skip-preflight          跳过部署前预检
   --console-replicas N      Console 副本数 (default: 2)
   -h, --help                显示帮助
 
@@ -67,6 +69,7 @@ while [[ $# -gt 0 ]]; do
         --ccr-user)         CCR_USER="$2"; shift 2 ;;
         --ccr-pass)         CCR_PASS="$2"; shift 2 ;;
         --skip-build)       SKIP_BUILD=true; shift ;;
+        --skip-preflight)   SKIP_PREFLIGHT=true; shift ;;
         --console-replicas) CONSOLE_REPLICAS="$2"; shift 2 ;;
         -h|--help)          usage ;;
         *)                  echo "Unknown option: $1"; usage ;;
@@ -85,6 +88,51 @@ echo "  K8s 命名空间: ${K8S_NAMESPACE}"
 echo "  Console 副本: ${CONSOLE_REPLICAS}"
 echo "=========================================="
 echo ""
+
+# ── 前置检查 ─────────────────────────────────────────────────────
+echo "[检查] 验证必要工具..."
+MISSING_TOOLS=false
+for tool in kubectl helm docker; do
+    if ! command -v "$tool" &>/dev/null; then
+        echo "  错误: 未找到 $tool，请先安装" >&2
+        MISSING_TOOLS=true
+    fi
+done
+if [ "$MISSING_TOOLS" = true ]; then
+    exit 1
+fi
+echo "  kubectl, helm, docker 均已就绪。"
+
+# 检查 kubectl 是否连接到集群
+if ! kubectl cluster-info &>/dev/null; then
+    echo "  错误: kubectl 未连接到集群，请先配置 kubeconfig" >&2
+    exit 1
+fi
+echo "  集群连接正常。"
+echo ""
+
+# CCR 凭证完整性检查
+if { [ -n "$CCR_USER" ] && [ -z "$CCR_PASS" ]; } || { [ -z "$CCR_USER" ] && [ -n "$CCR_PASS" ]; }; then
+    echo "  警告: 仅提供了一部分 CCR 认证信息（--ccr-user / --ccr-pass），将跳过 imagePullSecret 创建。"
+    CCR_USER=""
+    CCR_PASS=""
+fi
+
+# ── 部署前预检（可选） ───────────────────────────────────────────
+if [ "$SKIP_PREFLIGHT" = false ]; then
+    echo "[预检] 运行部署前节点兼容性检查..."
+    if [ -f "${SCRIPT_DIR}/preflight-check.sh" ]; then
+        if bash "${SCRIPT_DIR}/preflight-check.sh"; then
+            echo "  预检通过。"
+        else
+            echo "  预检未通过。使用 --skip-preflight 可跳过此检查。"
+            exit 1
+        fi
+    else
+        echo "  预检脚本不存在，跳过。"
+    fi
+    echo ""
+fi
 
 # ── Step 1: Build & Push images ─────────────────────────────────
 if [ "$SKIP_BUILD" = false ]; then

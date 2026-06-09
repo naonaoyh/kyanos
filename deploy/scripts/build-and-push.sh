@@ -47,21 +47,45 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --registry)   REGISTRY="$2"; shift 2 ;;
-        --namespace)  NAMESPACE="$2"; shift 2 ;;
-        --tag)        TAG="$2"; shift 2 ;;
-        --agent-only) AGENT_ONLY=true; shift ;;
-        --console-only) CONSOLE_ONLY=true; shift ;;
+        --registry|--namespace|--tag|--platform)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "错误: $1 需要一个参数值" >&2
+                exit 1
+            fi
+            case "$1" in
+                --registry)   REGISTRY="$2" ;;
+                --namespace)  NAMESPACE="$2" ;;
+                --tag)        TAG="$2" ;;
+                --platform)   PLATFORM="$2" ;;
+            esac
+            shift 2 ;;
+        --agent-only)
+            if [ "$CONSOLE_ONLY" = true ]; then
+                echo "错误: --agent-only 和 --console-only 不能同时使用" >&2
+                exit 1
+            fi
+            AGENT_ONLY=true; shift ;;
+        --console-only)
+            if [ "$AGENT_ONLY" = true ]; then
+                echo "错误: --agent-only 和 --console-only 不能同时使用" >&2
+                exit 1
+            fi
+            CONSOLE_ONLY=true; shift ;;
         --no-push)    PUSH=false; shift ;;
-        --platform)   PLATFORM="$2"; shift 2 ;;
         -h|--help)    usage ;;
         *)            echo "Unknown option: $1"; usage ;;
     esac
 done
 
+# 验证 docker 可用
+if ! command -v docker &>/dev/null; then
+    echo "错误: 未找到 docker 命令，请先安装 Docker" >&2
+    exit 1
+fi
+
 # Auto-detect version info
 VERSION="${TAG}"
-COMMIT_ID="$(cd "$PROJECT_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+COMMIT_ID="$(cd "$PROJECT_ROOT" && git rev-parse HEAD 2>/dev/null || echo 'unknown')"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 AGENT_IMAGE="${REGISTRY}/${NAMESPACE}/kyanos-agent:${TAG}"

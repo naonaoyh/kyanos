@@ -12,6 +12,16 @@
 #
 set -euo pipefail
 
+# ── 自动提权: 预检需要读取 /sys/kernel/debug 等内核路径 ──────────
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo &>/dev/null; then
+        exec sudo -E env "PATH=$PATH" "$0" "$@"
+    else
+        echo "错误: 此脚本需要 root 权限运行（请通过 sudo 执行）"
+        exit 1
+    fi
+fi
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'

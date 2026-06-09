@@ -66,9 +66,12 @@ docker push ccr.ccs.tencentyun.com/kyanos/kyanos-agent:latest
 ### Kyanos Console
 
 ```bash
-# Build from the console directory (Phase 8 implementation)
+# Build from the project root (Console Dockerfile references go.mod at root)
 docker build -f console/Dockerfile \
-  -t ccr.ccs.tencentyun.com/kyanos/kyanos-console:latest ./console/
+  --build-arg VERSION=$(git describe --tags --always) \
+  --build-arg COMMIT_ID=$(git rev-parse HEAD) \
+  --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  -t ccr.ccs.tencentyun.com/kyanos/kyanos-console:latest .
 
 docker push ccr.ccs.tencentyun.com/kyanos/kyanos-console:latest
 ```

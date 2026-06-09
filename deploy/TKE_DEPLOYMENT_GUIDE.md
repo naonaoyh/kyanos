@@ -1,6 +1,6 @@
 # Kyanos GNSS 诊断系统 — 腾讯云 TKE 部署说明书
 
-版本: 0.1.0 | 日期: 2026-06-09
+版本: 0.2.0 | 日期: 2026-06-09
 
 ---
 
@@ -110,10 +110,10 @@ kubectl cluster-info
 
 ### 2.4 节点 BPF 兼容性预检
 
-在部署前，建议在目标节点上运行预检脚本验证 eBPF 兼容性：
+在部署前，建议在目标节点上运行预检脚本验证 eBPF 兼容性。脚本会自动提权到 root（因为需要读取 `/sys/kernel/debug` 等内核路径）：
 
 ```bash
-# 将预检脚本传到 TKE 节点上执行
+# 将预检脚本传到 TKE 节点上执行（脚本会自动 sudo 提权）
 chmod +x deploy/scripts/preflight-check.sh
 ./deploy/scripts/preflight-check.sh
 ```
@@ -127,7 +127,7 @@ apt-get update && apt-get install -y curl
 curl -sSL https://raw.githubusercontent.com/your-repo/kyanos/main/deploy/scripts/preflight-check.sh | bash
 ```
 
-预检项目包括：内核版本、BTF 支持、BPF 系统调用、cgroup 挂载、tracefs 可用性和容器运行时检测。
+预检项目包括：内核版本、BTF 支持、BPF 系统调用、cgroup 挂载、tracefs 可用性和容器运行时检测。脚本输出通过（✓）、警告（⚠）、失败（✗）三级标记，任何一项失败将返回非零退出码。
 
 ---
 
@@ -167,7 +167,7 @@ chmod +x deploy/scripts/build-and-push.sh
 # 项目根目录
 docker build -f deploy/Dockerfile \
   --build-arg VERSION=$(git describe --tags --always) \
-  --build-arg COMMIT_ID=$(git rev-parse --short HEAD) \
+  --build-arg COMMIT_ID=$(git rev-parse HEAD) \
   --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
   -t ccr.ccs.tencentyun.com/kyanos/kyanos-agent:v0.1.0 \
   .
@@ -183,7 +183,7 @@ Console 使用多阶段构建，包含 Vue.js 前端编译和 Go 后端编译：
 # 项目根目录
 docker build -f console/Dockerfile \
   --build-arg VERSION=$(git describe --tags --always) \
-  --build-arg COMMIT_ID=$(git rev-parse --short HEAD) \
+  --build-arg COMMIT_ID=$(git rev-parse HEAD) \
   --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
   -t ccr.ccs.tencentyun.com/kyanos/kyanos-console:v0.1.0 \
   .
@@ -204,12 +204,12 @@ docker push ccr.ccs.tencentyun.com/kyanos/kyanos-console:v0.1.0
 
 ### 4.1 一键部署（推荐）
 
-使用提供的快速部署脚本：
+使用提供的快速部署脚本。脚本会在部署前自动验证 kubectl/helm/docker 工具可用性和集群连接状态，并可选运行节点预检：
 
 ```bash
 chmod +x deploy/scripts/quick-deploy.sh
 
-# 完整部署（构建 + 部署）
+# 完整部署（构建 + 部署，含预检）
 ./deploy/scripts/quick-deploy.sh \
   --ccr-namespace kyanos \
   --tag v0.1.0
@@ -219,6 +219,13 @@ chmod +x deploy/scripts/quick-deploy.sh
   --ccr-namespace kyanos \
   --tag v0.1.0 \
   --skip-build
+
+# 跳过预检（已在之前验证过）
+./deploy/scripts/quick-deploy.sh \
+  --ccr-namespace kyanos \
+  --tag v0.1.0 \
+  --skip-build \
+  --skip-preflight
 
 # 带 CCR 认证部署
 ./deploy/scripts/quick-deploy.sh \
@@ -372,6 +379,8 @@ Agent 通过 Helm values 和 kyanos CLI 参数进行配置。主要配置项：
 | `storageRetention` | 数据保留天数 | `7` |
 | `ingress.enabled` | 启用 Ingress | `false` |
 | `service.type` | Service 类型 | `ClusterIP` |
+
+> **持久化 + 多副本注意事项：** 当 `persistence.enabled=true` 且 `accessModes` 为 `ReadWriteOnce`（默认值）时，`replicaCount` 应设为 `1`。因为 `ReadWriteOnce` 只允许一个节点挂载该卷，多副本调度到不同节点时第二个 Pod 会卡在 `ContainerCreating` 状态。如需多副本 + 持久化，请将 `accessModes` 改为 `ReadWriteMany` 并使用支持此模式的存储类（如 CFS 或 NFS）。
 
 ### 5.3 TKE 环境专用配置示例
 
@@ -741,6 +750,47 @@ uname -r
 ls /sys/kernel/btf/vmlinux
 ls /sys/fs/bpf
 cat /proc/config.gz | gunzip | grep BPF
+```
+
+### 10.6 Console 第二个副本卡在 ContainerCreating
+
+启用持久化存储后，如果 PVC 使用 `ReadWriteOnce` 访问模式，第二个副本将无法挂载卷：
+
+```bash
+# 检查 PVC 状态
+kubectl get pvc -n kyanos-system
+
+# 确认 accessModes
+kubectl get pvc -n kyanos-system -o jsonpath='{.items[*].spec.accessModes}'
+
+# 解决方案（选其一）：
+# 方案 A: 将副本数降为 1
+helm upgrade kyanos-console deploy/helm/kyanos-console \
+  --namespace kyanos-system --set replicaCount=1
+
+# 方案 B: 改用 ReadWriteMany 存储类
+helm upgrade kyanos-console deploy/helm/kyanos-console \
+  --namespace kyanos-system \
+  --set persistence.accessModes[0]=ReadWriteMany \
+  --set persistence.storageClass="cfs-nfs"
+```
+
+### 10.7 Helm 升级后 Agent 无法连接 Console
+
+升级时如果修改了 Console Service 名称或端口，Agent 可能无法重连：
+
+```bash
+# 检查 Agent 使用的 Console 地址
+kubectl get pod -n kyanos-system <agent-pod> -o jsonpath='{.spec.containers[0].args}' | tr ',' '\n'
+
+# 检查 Service 端点
+kubectl get svc -n kyanos-system kyanos-console
+kubectl get endpoints -n kyanos-system kyanos-console
+
+# 修复: 更新 Agent 的 grpc.server 配置
+helm upgrade kyanos-agent deploy/helm/kyanos-agent \
+  --namespace kyanos-system \
+  --set grpc.server="kyanos-console.kyanos-system.svc.cluster.local:9090"
 ```
 
 ---

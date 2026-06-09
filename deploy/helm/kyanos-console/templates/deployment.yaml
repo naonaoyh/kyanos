@@ -40,7 +40,7 @@ spec:
             - "--storage-dir"
             - "/var/lib/kyanos-console"
             {{- end }}
-            {{- if ne .Values.storageRetention nil }}
+            {{- if hasKey .Values "storageRetention" }}
             - "--storage-retention"
             - {{ .Values.storageRetention | quote }}
             {{- end }}
