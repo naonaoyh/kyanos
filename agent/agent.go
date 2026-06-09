@@ -73,6 +73,7 @@ func SetupAgent(options ac.AgentOptions) {
 		return
 	} else {
 		options = validatedOptions
+		ac.Options = &options
 	}
 	common.LaunchEpochTime = GetMachineStartTimeNano()
 	stopper := options.Stopper

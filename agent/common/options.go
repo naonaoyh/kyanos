@@ -300,6 +300,9 @@ func ValidateAndRepairOptions(options AgentOptions) (AgentOptions, error) {
 	if newOptions.FirstPacketEventMapPageNum <= 0 {
 		newOptions.FirstPacketEventMapPageNum = 4
 	}
+	if newOptions.MaxAllowStuckTimeMills <= 0 {
+		newOptions.MaxAllowStuckTimeMills = 1000
+	}
 	// gRPC control-plane mode is opt-in (additive, not replacing). An empty
 	// GRPCServer keeps the Agent in Standalone_CLI_Mode and must NOT be
 	// rejected. Only validate the address when it is non-empty; an invalid

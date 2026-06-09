@@ -550,6 +550,9 @@ func TestSslRead(t *testing.T) {
 		findByStep:       true,
 		step:             bpf.AgentStepTSSL_IN,
 	})
+	if !assert.NotEmpty(t, syscallEvents, "no SSL_IN events captured (uprobe may not be available)") {
+		return
+	}
 	sslEvent := syscallEvents[0]
 	conn := connManager.FindConnection4Exactly(sslEvent.SslEventHeader.Ke.ConnIdS.TgidFd)
 	AssertSslEventData(t, sslEvent, SyscallDataEventAssertConditions{
@@ -630,7 +633,9 @@ func TestSslEventsCanRelatedToKernEvents(t *testing.T) {
 		findByStep:       true,
 		step:             bpf.AgentStepTSSL_OUT,
 	})
-	assert.True(t, len(sslEvents) > 0)
+	if !assert.True(t, len(sslEvents) > 0, "no SSL_OUT events captured (uprobe may not be available)") {
+		return
+	}
 	sslEvent := sslEvents[0]
 	conn := connManager.FindConnection4Exactly(sslEvent.SslEventHeader.Ke.ConnIdS.TgidFd)
 	se := conn.StreamEvents
@@ -687,6 +692,9 @@ func TestSslWrite(t *testing.T) {
 		findByStep:       true,
 		step:             bpf.AgentStepTSSL_OUT,
 	})
+	if !assert.NotEmpty(t, syscallEvents, "no SSL_OUT events captured (uprobe may not be available)") {
+		return
+	}
 	sslEvent := syscallEvents[0]
 	conn := connManager.FindConnection4Exactly(sslEvent.SslEventHeader.Ke.ConnIdS.TgidFd)
 	AssertSslEventData(t, sslEvent, SyscallDataEventAssertConditions{
