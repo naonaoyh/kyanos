@@ -380,15 +380,18 @@ func setAndValidateParameters(ctx context.Context, options *ac.AgentOptions) boo
 				case <-ctx.Done():
 					return
 				case execEvent := <-options.ProcessExecEventChannel:
-					proc, err := process.NewProcess(execEvent.Pid)
-
-					if err == nil && isProcNameMacthed(proc, options.FilterComm) {
-						err = filterPidMap.Update(uint32(execEvent.Pid), int8(one), ebpf.UpdateAny)
+					// Use the comm field directly from the BPF exec event
+					// instead of looking up /proc, because:
+					// 1. On WSL2, execEvent.Pid is BPF-visible and doesn't exist in /proc
+					// 2. The BPF-provided comm is always accurate and avoids /proc races
+					comm := int8ArrayToCommStr(execEvent.Comm)
+					if isCommMatched(comm, options.FilterComm) {
+						err := filterPidMap.Update(uint32(execEvent.Pid), int8(one), ebpf.UpdateAny)
 						if err != nil {
 							common.AgentLog.Errorf("Failed update  FilterPidMap: %s\n", err)
 						}
 					} else {
-						common.AgentLog.Debugf("Not matched: %d %s\n", execEvent.Pid, options.FilterComm)
+						common.AgentLog.Debugf("Not matched: %d %s %s\n", execEvent.Pid, comm, options.FilterComm)
 					}
 				}
 			}
@@ -488,6 +491,35 @@ func isProcNameMacthed(proc *process.Process, filterComm string) bool {
 		return true
 	}
 	if strings.Contains(procName, "/"+filterComm) {
+		return true
+	}
+	return false
+}
+
+// int8ArrayToCommStr converts a BPF comm field ([16]int8) to a Go string.
+// The comm field is a null-terminated, max-15-char process name.
+func int8ArrayToCommStr(arr [16]int8) string {
+	b := make([]byte, 0, 16)
+	for _, c := range arr {
+		if c == 0 {
+			break
+		}
+		b = append(b, byte(c))
+	}
+	return string(b)
+}
+
+// isCommMatched checks if a BPF comm string matches the filterComm option.
+// It matches by exact name or if comm appears as a path suffix of filterComm,
+// consistent with the behavior of isProcNameMacthed.
+func isCommMatched(comm string, filterComm string) bool {
+	if comm == filterComm {
+		return true
+	}
+	if strings.Contains(comm, "/"+filterComm) {
+		return true
+	}
+	if strings.Contains(filterComm, "/"+comm) {
 		return true
 	}
 	return false

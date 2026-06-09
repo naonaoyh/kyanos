@@ -176,8 +176,9 @@ type AgentKernEvtSslData struct {
 }
 
 type AgentProcessExecEvent struct {
-	_   structs.HostLayout
-	Pid int32
+	_    structs.HostLayout
+	Pid  int32
+	Comm [16]int8
 }
 
 type AgentProcessExitEvent struct {

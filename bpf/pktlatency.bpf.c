@@ -2506,6 +2506,7 @@ struct {
 
 struct process_exec_event {
 	int pid;
+	char comm[16];
 };
 
 struct process_exit_event {
@@ -2521,6 +2522,7 @@ static __always_inline int handle_sched_process_exec(void *ctx) {
 	bool is_thread_group_leader = tgid == tid;
 	if (is_thread_group_leader) {
 		event.pid = tgid;
+		bpf_get_current_comm(&event.comm, sizeof(event.comm));
 		bpf_perf_event_output(ctx, &proc_exec_events, BPF_F_CURRENT_CPU, &event, sizeof(struct process_exec_event));
 	}
 	return BPF_OK;
