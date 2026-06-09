@@ -10,7 +10,7 @@ SERVER_LNAME="${FILE_PREFIX}_kafka_server.log"
 
 
 function test_kafka_client() {
-    rm -rf /tm/kyanos_kafka_client.log
+    rm -rf /tmp/kyanos_kafka_client.log
     if [ -z "$DOCKER_REGISTRY" ]; then 
         IMAGE_NAME="apache/kafka:3.9.0"
     else

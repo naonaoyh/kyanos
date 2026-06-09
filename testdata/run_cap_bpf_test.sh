@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# Tests kyanos behavior with and without CAP_BPF capability inside Docker.
+# Requires root (auto-elevates if not root).
+
+# ── Root auto-elevation ─────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[INFO] This script requires root privileges (docker). Re-executing with sudo..."
+    exec sudo -E env "PATH=$PATH" "$0" "$@"
+fi
+
 set -ex
 
 DOCKER_REGISTRY="$1"

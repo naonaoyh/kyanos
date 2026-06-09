@@ -50,3 +50,18 @@ diag_bpf.sh
 diag_test.sh
 run_smoke_test.sh
 tmp_script.sh
+
+# Removed test scripts (superseded or redundant)
+run_quick_test.sh
+test_build.sh
+test_capture.sh
+test_http_ntrip_caster.py
+test_ntrip_capture.sh
+test_ntrip_tui.sh
+test_ntrip_webui.sh
+bpf/btfgen.sh
+
+# Developer debugging scripts (agent/testdata/)
+agent/testdata/bpftrace_*.sh
+agent/testdata/bpftool_*.sh
+agent/testdata/check_cpu.sh

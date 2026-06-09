@@ -11,7 +11,15 @@
 #   3. Client sends multiple GGA position updates (at intervals)
 #   4. Server streams RTCM frames (multiple types, at intervals)
 #   5. Connection closes (server-initiated)
+#
+# Root is auto-elevated when not already root.
 # =============================================================================
+
+# ── Root auto-elevation ─────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[INFO] This script requires root privileges (kyanos uses eBPF). Re-executing with sudo..."
+    exec sudo -E env "PATH=$PATH" "$0" "$@"
+fi
 
 # set -e intentionally omitted: kill/wait on background processes returns
 # non-zero codes (130/137) that would prematurely exit the script.
@@ -262,7 +270,18 @@ echo ""
 echo "--- JSONL session export ---"
 if [ -f "$JSONL_LOG" ]; then
     echo "Sessions exported: $(wc -l < $JSONL_LOG)"
-    python3 -m json.tool "$JSONL_LOG" 2>/dev/null | head -50 || cat "$JSONL_LOG"
+    python3 -c "
+import sys, json
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if line:
+        try:
+            obj = json.loads(line)
+            print(json.dumps(obj, indent=2))
+            print('---')
+        except json.JSONDecodeError:
+            print(line)
+" "$JSONL_LOG" 2>/dev/null | head -50 || cat "$JSONL_LOG"
 else
     echo "No JSONL output (file not created)"
 fi

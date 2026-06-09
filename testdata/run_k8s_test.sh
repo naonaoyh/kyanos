@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# Kubernetes integration test using kind.
+# Requires root (auto-elevates if not root).
+
+# ── Root auto-elevation ─────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[INFO] This script requires root privileges (docker/kind). Re-executing with sudo..."
+    exec sudo -E env "PATH=$PATH" "$0" "$@"
+fi
 
 set -ex
 

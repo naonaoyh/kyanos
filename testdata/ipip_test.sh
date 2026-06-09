@@ -1,4 +1,14 @@
 #!/bin/bash
+# IPIP tunnel network namespace setup for testing.
+# Requires root (auto-elevates if not root).
+
+set -e
+
+# ── Root auto-elevation ─────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[INFO] This script requires root privileges. Re-executing with sudo..."
+    exec sudo -E env "PATH=$PATH" "$0" "$@"
+fi
 
 # Enable IPIP module
 modprobe ipip

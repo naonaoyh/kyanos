@@ -13,6 +13,14 @@
 # Requirements:
 #   - WSL2 with eBPF support
 #   - Built kyanos binary (run 'make' first)
+#
+# Root is auto-elevated when not already root.
+
+# ── Root auto-elevation ─────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[INFO] This script requires root privileges (kyanos uses eBPF). Re-executing with sudo..."
+    exec sudo -E env "PATH=$PATH" "$0" "$@"
+fi
 #   - Python3 (for PCAP replay)
 #   - For --webui: npm installed (for 'npm run dev' frontend)
 # =============================================================================

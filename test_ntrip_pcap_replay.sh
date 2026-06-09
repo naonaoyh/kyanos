@@ -7,6 +7,14 @@
 #
 # Usage:
 #   ./test_ntrip_pcap_replay.sh         # Runs standard test suite with testdata-small.pcap
+#
+# Root is auto-elevated when not already root.
+
+# ── Root auto-elevation ─────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[INFO] This script requires root privileges (kyanos uses eBPF). Re-executing with sudo..."
+    exec sudo -E env "PATH=$PATH" "$0" "$@"
+fi
 
 export PATH=/usr/local/go/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH
 PROJDIR=$(pwd)

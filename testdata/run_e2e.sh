@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# E2E test orchestrator for Kyanos.
+# Requires root (auto-elevates if not root).
+
+# ── Root auto-elevation ─────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[INFO] This script requires root privileges (kyanos uses eBPF). Re-executing with sudo..."
+    exec sudo -E env "PATH=$PATH" "$0" "$@"
+fi
 
 
 
@@ -29,7 +37,7 @@ has_files() {
 
 
 function main() {
-  rm -rf /tmp/kyanos_* | true
+  rm -rf /tmp/kyanos_* || true
   # kubectl delete pod test-ptcpdump | true
   CMD="./kyanos"
   has_files "/var/lib/kyanos/btf"

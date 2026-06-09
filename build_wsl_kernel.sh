@@ -8,6 +8,14 @@
 #
 # Strategy: clone Microsoft's WSL2 kernel source (matching version), enable
 # CONFIG_FPROBE in the config, and rebuild. The resulting bzImage replaces
+#
+# Root is auto-elevated when not already root.
+
+# ── Root auto-elevation ─────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[INFO] This script requires root privileges. Re-executing with sudo..."
+    exec sudo -E env "PATH=$PATH" "$0" "$@"
+fi
 # the default WSL2 kernel.
 #
 # Run time: ~10-20 minutes on a modern machine

@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# Kyanos development environment setup for Ubuntu.
+# Requires root (auto-elevates if not root).
+
+# ── Root auto-elevation ─────────────────────────────────────────
+if [ "$(id -u)" -ne 0 ]; then
+    echo "[INFO] This script requires root privileges. Re-executing with sudo..."
+    exec sudo -E env "PATH=$PATH" "$0" "$@"
+fi
 
 release_num=$(lsb_release -r --short)
 if [ $? -ne 0 ]; then
@@ -9,8 +17,6 @@ fi
 CLANG_NUM=-12
 # shellcheck disable=SC2209
 if [ ${release_num} == "20.04" ]; then
-  CLANG_NUM=-10
-  elif [ ${release_num} == "20.04" ]; then
   CLANG_NUM=-10
   elif [ ${release_num} == "21.04" ]; then
   CLANG_NUM=-11

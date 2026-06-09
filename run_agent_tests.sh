@@ -1,20 +1,85 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Kyanos Agent Integration Test Runner
-# Run in WSL terminal: bash ~/projects/kyanos/run_agent_tests.sh
 #
-# Requires: sudo, Go at ~/local/go, curl, internet access
+# Usage:
+#   ./run_agent_tests.sh              # Full test suite
+#   ./run_agent_tests.sh --quick      # Quick smoke test (4 key tests)
+#   ./run_agent_tests.sh --test NAME  # Run a single test by name
+#
+# Requires: Go, curl, internet access
+# Root is auto-elevated when not already root.
 
 set -o pipefail
 
-export PATH="/home/naonaoyh/local/go/bin:/home/naonaoyh/local/bin:$PATH"
-KYANOS_DIR="$HOME/projects/kyanos"
+# ── Root auto-elevation ─────────────────────────────────────────
+ensure_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "[INFO] This script requires root privileges. Re-executing with sudo..."
+        exec sudo -E env "PATH=$PATH" "$0" "$@"
+    fi
+}
+
+# ── Project root detection ──────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+KYANOS_DIR="$SCRIPT_DIR"
 LOG_DIR="$KYANOS_DIR/test_logs"
 mkdir -p "$LOG_DIR"
+
+# ── Go auto-detection ───────────────────────────────────────────
+detect_go() {
+    if command -v go &>/dev/null; then
+        return 0
+    fi
+    # Common Go install paths
+    for p in /usr/local/go/bin /snap/bin /home/*/go/bin /home/*/local/go/bin; do
+        if [ -x "$p/go" ]; then
+            export PATH="$p:$PATH"
+            return 0
+        fi
+    done
+    echo "ERROR: Go not found. Install Go or add it to PATH."
+    exit 1
+}
+
+# ── Parse arguments ─────────────────────────────────────────────
+MODE="full"
+SINGLE_TEST=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --quick)
+            MODE="quick"
+            shift
+            ;;
+        --test)
+            MODE="single"
+            SINGLE_TEST="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--quick | --test TEST_NAME]"
+            echo ""
+            echo "  (no args)     Run full test suite"
+            echo "  --quick        Quick smoke test (4 key tests)"
+            echo "  --test NAME    Run a single test by name"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# Auto-elevate to root
+ensure_root "$@"
+
+detect_go
 
 cd "$KYANOS_DIR"
 
 echo "============================================="
 echo "  Kyanos Agent Integration Test Suite"
+echo "  Mode: $MODE"
 echo "  $(date)"
 echo "  Kernel: $(uname -r)"
 echo "  Go: $(go version)"
@@ -23,167 +88,143 @@ echo ""
 
 # Check prerequisites
 echo "[Pre-flight] Checking prerequisites..."
-if ! go version &>/dev/null; then
-    echo "  ERROR: Go not found in PATH"
-    exit 1
-fi
 if ! which curl &>/dev/null; then
     echo "  ERROR: curl not found"
     exit 1
 fi
 echo "  Go: $(go version)"
 echo "  curl: $(curl --version | head -1)"
-echo "  sudo: $(sudo -n true 2>&1 && echo 'OK (cached)' || echo 'will prompt')"
+echo "  User: $(whoami) (uid=$(id -u))"
 echo ""
 
-# ============================================================
-# Phase 1: Basic syscall tests (connect, accept, read, write)
-# ============================================================
-echo "============================================="
-echo "  Phase 1: Basic Syscall Tests"
-echo "============================================="
-echo ""
-
-TESTS_PHASE1="TestConnectSyscall TestAccept TestRead TestWrite"
-for test in $TESTS_PHASE1; do
+# ── Test execution helper ───────────────────────────────────────
+run_test() {
+    local test="$1"
+    local timeout="${2:-120}"
     echo "--- Running: $test ---"
-    START=$(date +%s)
-    sudo -E env "PATH=$PATH" go test -v -count=1 -timeout 120s -run "^${test}$" ./agent/ 2>&1 | tee "$LOG_DIR/${test}.log"
-    EXIT_CODE=${PIPESTATUS[0]}
-    END=$(date +%s)
-    ELAPSED=$((END - START))
-    
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo "  => PASS (${ELAPSED}s)"
+    local start=$(date +%s)
+    go test -v -count=1 -timeout "${timeout}s" -run "^${test}$" ./agent/ 2>&1 | tee "$LOG_DIR/${test}.log"
+    local exit_code=${PIPESTATUS[0]}
+    local end=$(date +%s)
+    local elapsed=$((end - start))
+
+    if [ $exit_code -eq 0 ]; then
+        echo "  => PASS (${elapsed}s)"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        PASS_LIST="$PASS_LIST $test"
     else
-        echo "  => FAIL (exit=$EXIT_CODE, ${ELAPSED}s)"
+        echo "  => FAIL (exit=$exit_code, ${elapsed}s)"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        FAIL_LIST="$FAIL_LIST $test"
     fi
     echo ""
-done
+}
 
-# ============================================================
-# Phase 2: Syscall variants (recvfrom, sendto, readv, writev, recvmsg, sendmsg)
-# ============================================================
-echo "============================================="
-echo "  Phase 2: Syscall Variant Tests"
-echo "============================================="
-echo ""
+PASS_COUNT=0
+FAIL_COUNT=0
+PASS_LIST=""
+FAIL_LIST=""
 
-TESTS_PHASE2="TestRecvFrom TestSendto TestReadv TestWritev TestRecvmsg TestSendMsg"
-for test in $TESTS_PHASE2; do
-    echo "--- Running: $test ---"
-    START=$(date +%s)
-    sudo -E env "PATH=$PATH" go test -v -count=1 -timeout 120s -run "^${test}$" ./agent/ 2>&1 | tee "$LOG_DIR/${test}.log"
-    EXIT_CODE=${PIPESTATUS[0]}
-    END=$(date +%s)
-    ELAPSED=$((END - START))
-    
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo "  => PASS (${ELAPSED}s)"
-    else
-        echo "  => FAIL (exit=$EXIT_CODE, ${ELAPSED}s)"
-    fi
+# ── Quick mode: 4 key tests ─────────────────────────────────────
+run_quick() {
+    echo "============================================="
+    echo "  Quick Smoke Test (4 tests)"
+    echo "============================================="
     echo ""
-done
+    run_test "TestConnectSyscall"
+    run_test "TestRead"
+    run_test "TestWrite"
+    run_test "TestSslRead"
+}
 
-# ============================================================
-# Phase 3: Kernel-level tests (network stack monitoring)
-# ============================================================
-echo "============================================="
-echo "  Phase 3: Kernel Network Stack Tests"
-echo "============================================="
-echo ""
-
-TESTS_PHASE3="TestIpXmit TestDevQueueXmit TestDevHardStartXmit TestTracepointNetifReceiveSkb TestIpRcvCore TestTcpV4DoRcv TestSkbCopyDatagramIter"
-for test in $TESTS_PHASE3; do
-    echo "--- Running: $test ---"
-    START=$(date +%s)
-    sudo -E env "PATH=$PATH" go test -v -count=1 -timeout 120s -run "^${test}$" ./agent/ 2>&1 | tee "$LOG_DIR/${test}.log"
-    EXIT_CODE=${PIPESTATUS[0]}
-    END=$(date +%s)
-    ELAPSED=$((END - START))
-    
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo "  => PASS (${ELAPSED}s)"
-    else
-        echo "  => FAIL (exit=$EXIT_CODE, ${ELAPSED}s)"
-    fi
+# ── Full mode: all phases ────────────────────────────────────────
+run_full() {
+    echo "============================================="
+    echo "  Phase 1: Basic Syscall Tests"
+    echo "============================================="
     echo ""
-done
+    for test in TestConnectSyscall TestAccept TestRead TestWrite; do
+        run_test "$test"
+    done
 
-# ============================================================
-# Phase 4: SSL/TLS tests
-# ============================================================
-echo "============================================="
-echo "  Phase 4: SSL/TLS Tests"
-echo "============================================="
-echo ""
-
-TESTS_PHASE4="TestSslRead TestSslWrite TestSslEventsCanRelatedToKernEvents"
-for test in $TESTS_PHASE4; do
-    echo "--- Running: $test ---"
-    START=$(date +%s)
-    sudo -E env "PATH=$PATH" go test -v -count=1 -timeout 120s -run "^${test}$" ./agent/ 2>&1 | tee "$LOG_DIR/${test}.log"
-    EXIT_CODE=${PIPESTATUS[0]}
-    END=$(date +%s)
-    ELAPSED=$((END - START))
-    
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo "  => PASS (${ELAPSED}s)"
-    else
-        echo "  => FAIL (exit=$EXIT_CODE, ${ELAPSED}s)"
-    fi
+    echo "============================================="
+    echo "  Phase 2: Syscall Variant Tests"
+    echo "============================================="
     echo ""
-done
+    for test in TestRecvFrom TestSendto TestReadv TestWritev TestRecvmsg TestSendMsg; do
+        run_test "$test"
+    done
 
-# ============================================================
-# Phase 5: Connection lifecycle tests
-# ============================================================
-echo "============================================="
-echo "  Phase 5: Connection Lifecycle Tests"
-echo "============================================="
-echo ""
-
-TESTS_PHASE5="TestExistedConn TestCloseSyscall"
-for test in $TESTS_PHASE5; do
-    echo "--- Running: $test ---"
-    START=$(date +%s)
-    sudo -E env "PATH=$PATH" go test -v -count=1 -timeout 120s -run "^${test}$" ./agent/ 2>&1 | tee "$LOG_DIR/${test}.log"
-    EXIT_CODE=${PIPESTATUS[0]}
-    END=$(date +%s)
-    ELAPSED=$((END - START))
-    
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo "  => PASS (${ELAPSED}s)"
-    else
-        echo "  => FAIL (exit=$EXIT_CODE, ${ELAPSED}s)"
-    fi
+    echo "============================================="
+    echo "  Phase 3: Kernel Network Stack Tests"
+    echo "============================================="
     echo ""
-done
+    for test in TestIpXmit TestDevQueueXmit TestDevHardStartXmit TestTracepointNetifReceiveSkb TestIpRcvCore TestTcpV4DoRcv TestSkbCopyDatagramIter; do
+        run_test "$test"
+    done
 
-# ============================================================
-# Summary
-# ============================================================
+    echo "============================================="
+    echo "  Phase 4: SSL/TLS Tests"
+    echo "============================================="
+    echo ""
+    for test in TestSslRead TestSslWrite TestSslEventsCanRelatedToKernEvents; do
+        run_test "$test"
+    done
+
+    echo "============================================="
+    echo "  Phase 5: Connection Lifecycle Tests"
+    echo "============================================="
+    echo ""
+    for test in TestExistedConn TestCloseSyscall; do
+        run_test "$test"
+    done
+}
+
+# ── Dispatch ─────────────────────────────────────────────────────
+case "$MODE" in
+    quick)
+        run_quick
+        ;;
+    single)
+        if [ -z "$SINGLE_TEST" ]; then
+            echo "ERROR: --test requires a test name"
+            exit 1
+        fi
+        echo "============================================="
+        echo "  Single Test: $SINGLE_TEST"
+        echo "============================================="
+        echo ""
+        run_test "$SINGLE_TEST"
+        ;;
+    full)
+        run_full
+        ;;
+esac
+
+# ── Summary ──────────────────────────────────────────────────────
 echo "============================================="
 echo "  Test Summary"
 echo "============================================="
 echo ""
 
-ALL_TESTS="$TESTS_PHASE1 $TESTS_PHASE2 $TESTS_PHASE3 $TESTS_PHASE4 $TESTS_PHASE5"
-PASS=0
-FAIL=0
-for test in $ALL_TESTS; do
-    if grep -q "^ok" "$LOG_DIR/${test}.log" 2>/dev/null; then
-        echo "  PASS: $test"
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL: $test"
-        FAIL=$((FAIL + 1))
-    fi
-done
+TOTAL=$((PASS_COUNT + FAIL_COUNT))
+
+if [ $PASS_COUNT -gt 0 ]; then
+    for t in $PASS_LIST; do
+        echo "  PASS: $t"
+    done
+fi
+
+if [ $FAIL_COUNT -gt 0 ]; then
+    for t in $FAIL_LIST; do
+        echo "  FAIL: $t"
+    done
+fi
 
 echo ""
-echo "Total: $((PASS + FAIL))  Passed: $PASS  Failed: $FAIL"
+echo "Total: $TOTAL  Passed: $PASS_COUNT  Failed: $FAIL_COUNT"
 echo ""
 echo "Logs saved to: $LOG_DIR/"
 echo "============================================="
+
+exit $FAIL_COUNT
