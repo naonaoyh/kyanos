@@ -11,12 +11,13 @@
 // userspace sees via getpid() / /proc. This probe is used to detect the
 // BPF-visible PID so that the PID filter map can be populated correctly.
 //
-// Build (run from project root E:/Work/kyanos):
+// Build (automated via `make build-bpf`, or manually from project root):
 //
 //   clang -g -O2 -target bpf \
 //     -D__TARGET_ARCH_x86_64 \
 //     -I./vmlinux/x86/ \
 //     -I./.output/ \
+//     -I./libbpf/include/uapi \
 //     -c bpf/loader/bpfsrc/pid_check.bpf.c \
 //     -o bpf/loader/pid_check.bpf.o
 //

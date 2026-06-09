@@ -65,8 +65,15 @@ $(BPFTOOL): | $(BPFTOOL_OUTPUT)
 
 GO_FILES := $(shell find $(SRC_DIR) -type f -name '*.go' | sort)  
 
+# Build pid_check BPF probe (for WSL2 PID translation detection)
+bpf/loader/pid_check.bpf.o: bpf/loader/bpfsrc/pid_check.bpf.c | $(OUTPUT)
+	$(call msg,BPF-PID,$@)
+	$(Q)$(CLANG) -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) \
+		-I./vmlinux/$(ARCH)/ -I$(OUTPUT) -I./libbpf/include/uapi \
+		-c bpf/loader/bpfsrc/pid_check.bpf.c -o bpf/loader/pid_check.bpf.o
+
 .PHONY: build-bpf
-build-bpf: $(LIBBPF_OBJ) $(wildcard bpf/*.[ch]) | $(OUTPUT)
+build-bpf: $(LIBBPF_OBJ) $(wildcard bpf/*.[ch]) bpf/loader/pid_check.bpf.o | $(OUTPUT)
 	TARGET=amd64 go generate ./bpf/
 	TARGET=arm64 go generate ./bpf/
 
