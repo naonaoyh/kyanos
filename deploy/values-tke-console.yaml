@@ -1,0 +1,70 @@
+# TKE Console 专用 values 覆盖
+# 用法: helm install kyanos-console deploy/helm/kyanos-console -n kyanos-system -f deploy/values-tke-console.yaml
+
+image:
+  registry: ccr.ccs.tencentyun.com
+  repository: <YOUR_CCR_NAMESPACE>/kyanos-console
+  tag: "<YOUR_IMAGE_TAG>"
+  pullPolicy: IfNotPresent
+
+# 如需私有仓库认证，取消注释:
+# imagePullSecrets:
+#   - name: ccr-secret
+
+replicaCount: 2
+
+grpc:
+  port: 9090
+  tls:
+    enabled: false
+    # 生产环境建议启用:
+    # enabled: true
+    # secretName: kyanos-console-tls
+
+http:
+  port: 8080
+
+service:
+  type: ClusterIP
+  grpcPort: 9090
+  httpPort: 8080
+
+# 如需通过 Ingress 暴露 Web 面板（TKE 使用 CLB Ingress Controller）:
+ingress:
+  enabled: false
+  # className: "qcloud"
+  # annotations:
+  #   kubernetes.io/ingress.class: qcloud
+  #   # 使用已有的 CLB 实例:
+  #   kubernetes.io/ingress.existLbId: "<YOUR_CLB_ID>"
+  # hosts:
+  #   - host: console.kyanos.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  # tls:
+  #   - secretName: kyanos-console-ingress-tls
+  #     hosts:
+  #       - console.kyanos.example.com
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# 持久化存储（推荐生产环境启用）
+persistence:
+  enabled: false
+  # storageClass: "cbs-ssd"  # TKE CBS 存储类
+  # size: 20Gi
+  # accessModes:
+  #   - ReadWriteOnce
+
+storageRetention: 7
+
+serviceAccount:
+  create: true
+  name: "kyanos-console"

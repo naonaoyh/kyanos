@@ -28,6 +28,22 @@ spec:
         - name: console
           image: {{ include "kyanos-console.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - "./kyanos"
+          args:
+            - "console"
+            - "--grpc-addr"
+            - ":{{ .Values.grpc.port }}"
+            - "--http-addr"
+            - ":{{ .Values.http.port }}"
+            {{- if .Values.persistence.enabled }}
+            - "--storage-dir"
+            - "/var/lib/kyanos-console"
+            {{- end }}
+            {{- if ne .Values.storageRetention nil }}
+            - "--storage-retention"
+            - {{ .Values.storageRetention | quote }}
+            {{- end }}
           ports:
             - name: grpc
               containerPort: {{ .Values.grpc.port }}
@@ -47,6 +63,9 @@ spec:
               value: "/etc/kyanos-console/tls/tls.crt"
             - name: GRPC_TLS_KEY
               value: "/etc/kyanos-console/tls/tls.key"
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           livenessProbe:
             httpGet:

@@ -325,6 +325,18 @@ kubectl logs -n kyanos-system -l app.kubernetes.io/name=kyanos-console
 |------|------|---------|
 | 1. Agent 运行 | `kubectl get ds -n kyanos-system` | DESIRED = READY |
 | 2. Console 运行 | `kubectl get deploy -n kyanos-system` | AVAILABLE = 2 |
-| 3. 测试流量 | `kubectl apply -f deploy/test-ntrip-pod.yaml` | Pod Running |
-| 4. 流量捕获 | `kubectl logs -n kyanos-system -l app.kubernetes.io/name=kyanos-agent` | 看到 NTRIP/RTCM 事件 |
-| 5. Console 接收 | Console HTTP :8080 面板 | 看到在线 Agent + 会话数据 |
+| 3. 健康检查 | `curl localhost:8080/healthz` | `ok`（纯文本） |
+| 4. 就绪检查 | `curl localhost:8080/readyz` | `ok`（纯文本） |
+| 5. 测试流量 | `kubectl apply -f deploy/test-ntrip-pod.yaml` | Pod Running |
+| 6. 流量捕获 | `kubectl logs -n kyanos-system -l app.kubernetes.io/name=kyanos-agent` | 看到 NTRIP/RTCM 事件 |
+| 7. Console 接收 | Console HTTP :8080 面板 | 看到在线 Agent + 会话数据 |
+
+## 更多文档
+
+详细的 TKE 部署说明书、一键部署脚本和节点预检工具请参阅：
+
+- [TKE 部署说明书](./TKE_DEPLOYMENT_GUIDE.md) — 完整的腾讯云 TKE 部署指南
+- `scripts/build-and-push.sh` — 镜像构建和推送脚本
+- `scripts/quick-deploy.sh` — TKE 一键部署脚本
+- `scripts/preflight-check.sh` — 节点 eBPF 兼容性预检脚本
+- `values-tke.yaml` / `values-tke-console.yaml` — TKE 专用 Helm values 覆盖

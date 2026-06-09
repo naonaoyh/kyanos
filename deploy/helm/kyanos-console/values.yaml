@@ -58,6 +58,12 @@ persistence:
   accessModes:
     - ReadWriteOnce
 
+# Data retention in days (0 = disable automated deletion)
+storageRetention: 7
+
+# Additional environment variables
+extraEnv: []
+
 # Pod configuration
 nodeSelector: {}
 tolerations: []

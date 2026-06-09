@@ -23,9 +23,9 @@ data:
     {{- if .Values.grpc.tls.enabled }}
     grpc-tls: true
     {{- if .Values.grpc.tls.caCert }}
-    grpc-ca-cert: {{ .Values.grpc.tls.caCert | quote }}
+    grpc-ca: {{ .Values.grpc.tls.caCert | quote }}
     {{- end }}
     {{- if .Values.grpc.tls.insecureSkipVerify }}
-    grpc-tls-skip-verify: true
+    grpc-tls-insecure: true
     {{- end }}
     {{- end }}

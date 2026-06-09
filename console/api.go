@@ -86,6 +86,10 @@ func (h *APIHandler) registerRoutes() {
 	// Health check.
 	h.mux.HandleFunc("GET /api/v1/health", h.health)
 
+	// Kubernetes probe endpoints (lightweight, no JSON serialization).
+	h.mux.HandleFunc("GET /healthz", h.healthz)
+	h.mux.HandleFunc("GET /readyz", h.readyz)
+
 	// Agent TUI control (for embedded mode).
 	h.mux.HandleFunc("POST /api/v1/agent/tui-mode", h.setTUIMode)
 }
@@ -502,6 +506,22 @@ func (h *APIHandler) health(w http.ResponseWriter, r *http.Request) {
 		"active_sessions":  h.store.ActiveSessionCount(),
 		"ws_subscribers":   h.hub.TotalSubscriberCount(),
 	})
+}
+
+// healthz is a lightweight liveness probe for Kubernetes.
+// Returns 200 OK with plain text "ok" when the process is alive.
+func (h *APIHandler) healthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
+
+// readyz is a readiness probe for Kubernetes.
+// Returns 200 when the server is ready to accept traffic.
+func (h *APIHandler) readyz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
 }
 
 func (h *APIHandler) setTUIMode(w http.ResponseWriter, r *http.Request) {

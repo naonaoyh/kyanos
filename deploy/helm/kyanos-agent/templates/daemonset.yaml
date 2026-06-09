@@ -43,6 +43,7 @@ spec:
           args:
             - "watch"
             - {{ .Values.diagnostics.protocol | quote }}
+            - "--no-tui"
             {{- if .Values.diagnostics.enabled }}
             - "--diag"
             {{- end }}
@@ -54,7 +55,7 @@ spec:
             {{- if .Values.grpc.tls.enabled }}
             - "--grpc-tls"
             {{- if .Values.grpc.tls.caCert }}
-            - "--grpc-ca-cert"
+            - "--grpc-ca"
             - {{ .Values.grpc.tls.caCert | quote }}
             {{- end }}
             {{- end }}

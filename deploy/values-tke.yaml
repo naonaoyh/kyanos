@@ -1,0 +1,69 @@
+# TKE (Tencent Kubernetes Engine) 专用 values 覆盖
+# 用法: helm install kyanos-agent deploy/helm/kyanos-agent -n kyanos-system -f deploy/values-tke.yaml
+#
+# 部署前请替换以下占位符:
+#   <YOUR_CCR_NAMESPACE>  — 腾讯云 CCR 命名空间
+#   <YOUR_IMAGE_TAG>      — 镜像 tag（如 v0.1.0）
+#   <YOUR_CONSOLE_NAMESPACE> — Console 所在的 K8s namespace（默认 kyanos-system）
+
+image:
+  registry: ccr.ccs.tencentyun.com
+  repository: <YOUR_CCR_NAMESPACE>/kyanos-agent
+  tag: "<YOUR_IMAGE_TAG>"
+  pullPolicy: IfNotPresent
+
+# 如需私有仓库认证，取消注释:
+# imagePullSecrets:
+#   - name: ccr-secret
+
+grpc:
+  server: "kyanos-console.<YOUR_CONSOLE_NAMESPACE>.svc.cluster.local:9090"
+  tls:
+    enabled: false
+    # 生产环境建议启用 TLS:
+    # enabled: true
+    # caCert: "/etc/kyanos/tls/ca.crt"
+
+diagnostics:
+  enabled: true
+  protocol: "ntrip"
+  tcpHealth: true
+  extraArgs:
+    - "--grpc-pod-resolve"
+    # 如需指定目标 namespace:
+    # - "--grpc-namespace=default"
+    # 如需过滤特定远端端口:
+    # - "--remote-port=2101"
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# 仅调度到特定节点（按需取消注释）:
+# nodeSelector:
+#   node-role.kubernetes.io/gnss: ""
+
+tolerations:
+  # 容忍所有污点，确保每个节点都能调度 Agent
+  - operator: Exists
+
+# 如需更细粒度的容忍策略:
+# tolerations:
+#   - key: "dedicated"
+#     operator: "Equal"
+#     value: "gnss"
+#     effect: "NoSchedule"
+
+# 日志级别（debug 模式排查问题时取消注释）:
+# extraEnv:
+#   - name: KYANOS_LOG_LEVEL
+#     value: "debug"
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1

@@ -316,3 +316,13 @@ kubectl exec -n kyanos-system <agent-pod> -- \
 # Check console logs for registration events
 kubectl logs -n kyanos-system -l app.kubernetes.io/name=kyanos-console
 ```
+
+## Additional Resources
+
+For a comprehensive deployment guide, automation scripts, and preflight checks:
+
+- [TKE Deployment Guide](./TKE_DEPLOYMENT_GUIDE.md) — Full guide for Tencent Kubernetes Engine
+- `scripts/build-and-push.sh` — Build and push container images
+- `scripts/quick-deploy.sh` — One-command TKE deployment
+- `scripts/preflight-check.sh` — Node eBPF compatibility checker
+- `values-tke.yaml` / `values-tke-console.yaml` — TKE-specific Helm value overrides
