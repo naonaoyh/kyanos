@@ -44,6 +44,28 @@ func GetBpfVisiblePid() uint32 {
 	return detectedBpfVisiblePid
 }
 
+// EnsurePidDetected triggers WSL2 BPF-visible PID detection from the calling
+// goroutine and caches the result. On non-WSL2 systems this is a no-op.
+//
+// This MUST be called from the goroutine that will make the actual network
+// connections being traced, because on WSL2 different goroutines in the same
+// process can have different BPF-visible TGIDs. By calling this early from the
+// main goroutine (before spawning SetupAgent in a separate goroutine), we ensure
+// the detected PID matches the one BPF will see for subsequent network activity.
+func EnsurePidDetected() {
+	if !isWSL2() {
+		return
+	}
+	if detectedBpfVisiblePid != 0 {
+		return
+	}
+	if pid, err := detectBpfVisiblePid(); err != nil {
+		common.AgentLog.Warnf("WSL2 PID pre-detection failed: %v", err)
+	} else {
+		common.AgentLog.Infof("WSL2 PID pre-detection: BPF-visible PID = %d", pid)
+	}
+}
+
 // IsWSL2 checks if the current system is running WSL2
 func IsWSL2() bool {
 	return isWSL2()
@@ -70,6 +92,16 @@ type pidDetectEvent struct {
 // On WSL2, this may differ from the userspace PID returned by os.Getpid()
 // due to WSL2's PID translation layer.
 func detectBpfVisiblePid() (uint32, error) {
+	// Return cached result if detection was already performed.
+	// This is critical for WSL2 where different goroutines may have different
+	// BPF-visible TGIDs. If EnsurePidDetected() was called from the main
+	// goroutine (which will also make the actual network connections),
+	// we must reuse that result rather than re-detecting from a different
+	// goroutine that may map to a different BPF TGID.
+	if detectedBpfVisiblePid != 0 {
+		return detectedBpfVisiblePid, nil
+	}
+
 	rd := bytes.NewReader(pidCheckBpfO)
 	spec, err := ebpf.LoadCollectionSpecFromReader(rd)
 	if err != nil {

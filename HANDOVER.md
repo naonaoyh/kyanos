@@ -1,6 +1,6 @@
 # Kyanos GNSS 专项开发 — 交接文档
 
-> 最后更新: 2026-06-06 (Agent 集成测试修复: TUI 卡死 + 除零 + 内核版本检测)
+> 最后更新: 2026-06-09 (WSL2 集成测试全面修复: 构建可移植性 + conntrack crash + 多 goroutine PID + 30/34 通过)
 > 分支: `feat/gnss-ntrip-rtcm-support`
 > 仓库: `https://github.com/naonaoyh/kyanos.git`
 > 上游: `https://github.com/hengyoush/kyanos` (原始 Kyanos 项目)
@@ -870,7 +870,117 @@ WSL2 (kernel 6.18.33) 的 `bpf_get_current_pid_tgid()` 返回的 PID 与用户�
 
 ### 20.7 剩余工作
 
-1. **conntrack nil pointer crash** (`conntrack.go:807` `progressIsStucked`): 影响 ~7 个测试的预存在 bug
-2. **TestIpXmit fd 不匹配**: 内核事件中 fd 值在 WSL2 上与预期不同
-3. **FilterComm 路径**: `setAndValidateParameters()` 中的 comm 过滤仍使用用户态 PID，如需在 WSL2 上使用需额外翻译
+1. ~~**conntrack nil pointer crash** (`conntrack.go:807` `progressIsStucked`): 影响 ~7 个测试的预存在 bug~~ → **已在 §21.3 修复**
+2. ~~**TestIpXmit fd 不匹配**: 内核事件中 fd 值在 WSL2 上与预期不同~~ → **已在 §21.5 修复** (WSL2 多 goroutine PID 修复同时解决)
+3. **FilterComm 路径**: `setAndValidateParameters()` 中的 comm 过滤仍使用用户态 PID，如需在 WSL2 上使用需额外翻译 → **exec 事件路径已在 §21.2 修复**，初始扫描路径仍待处理
 4. **诊断文件备份**: 所有调试期诊断文件已移至 `.diag_backup/` 目录
+
+---
+
+## 21. WSL2 集成测试全面修复 — 构建可移植性 + 运行时稳定性 (2026-06-09)
+
+### 21.1 构建可移植性修复: pid_check.bpf.o
+
+**问题**: 在全新 clone 的 WSL 机器上执行 `make build-bpf && make` 报错:
+```
+bpf/loader/wsl2_loader.go:29:12: pattern pid_check.bpf.o: no matching files found
+```
+
+**根因**: `.gitignore` 包含 `*.o` 规则，导致编译后的 `pid_check.bpf.o` 从未被提交。`go:embed` 在编译时找不到该文件。
+
+**修复**:
+- 在 Makefile 中添加 `bpf/loader/pid_check.bpf.o` 的编译规则，从 `bpf/loader/bpfsrc/pid_check.bpf.c` 编译
+- 将该规则作为 `build-bpf` target 的依赖
+- 修复 Makefile 变量展开问题: `VMLINUX := ./vmlinux/$(ARCH)/vmlinux.h` 使用 `:=` (立即展开) 导致 `$(ARCH)` 为空。改为在 clang 命令中直接使用 `./vmlinux/$(ARCH)/` (延迟展开)
+
+**Commit**: `ebcbd86`
+
+### 21.2 FilterComm exec 事件路径修复
+
+**问题**: BPF exec 事件处理器通过 `process.NewProcess(execEvent.Pid)` 查找进程名，但在 WSL2 上 BPF PID 不存在于 `/proc`，导致查找失败。
+
+**修复**:
+- 在 `process_exec_event` BPF C 结构体中添加 `char comm[16]` 字段
+- 在 BPF tracepoint handler 中使用 `bpf_get_current_comm()` 填充
+- 重新生成 Go 绑定 (`make build-bpf`)，生成 `Comm [16]int8`
+- 修改 Go 端 exec 事件处理器，直接使用 BPF 提供的 comm 进行匹配
+- 添加 `int8ArrayToCommStr()` 和 `isCommMatched()` 辅助函数
+
+**Commit**: `8b38281`
+
+### 21.3 Conntrack nil pointer crash 修复
+
+**问题**: `conntrack.go:807` 的 `progressIsStucked()` 访问 `ac.Options.MaxAllowStuckTimeMills` 时 nil pointer panic，影响 TestExistedConn, TestReadv, TestWritev, TestRecvmsg, TestSendMsg, TestSslRead, TestSslWrite 等 ~7 个测试。
+
+**根因**: `ac.Options` 是全局指针 (`var Options *AgentOptions`)，仅在 CLI 入口 `cmd/common.go:80` 赋值。测试直接调用 `SetupAgent()` 绕过了 CLI，导致 `Options` 为 nil。
+
+**修复**:
+- `agent/agent.go`: 在 `SetupAgent()` 的 options 验证后添加 `ac.Options = &options`
+- `agent/common/options.go`: 在 `ValidateAndRepairOptions` 中添加 `MaxAllowStuckTimeMills` 默认值 1000
+- `agent/agent_test.go`: 在 SSL 测试 (TestSslRead, TestSslWrite, TestSslEventsCanRelatedToKernEvents) 中添加空切片守卫，避免 uprobe 不可用时的 panic
+
+**Commit**: `40df98f`
+
+### 21.4 dial_only.go 缺失修复
+
+**问题**: `TestSubprocessConnect` 因 `agent/testdata/dial_only.go` 文件缺失而编译失败。
+
+**修复**: 重建 `agent/testdata/dial_only.go` — 一个独立的 Go 小程序，打印 `DIAL_PID=<pid>` 后尝试 TCP 连接以触发 `__sys_connect` kprobe。
+
+### 21.5 WSL2 多 goroutine BPF PID 不一致修复
+
+**问题**: `TestSkbCopyDatagramIter` 等测试断言失败:
+```
+expected: 0x1b33a (109776, userspace PID)
+actual  : 0x3786  (14214, BPF PID)
+```
+
+**根因**: WSL2 上不同 goroutine 的 BPF-visible TGID 不同。`StartAgent0` 在独立 goroutine 中运行 `SetupAgent`，PID 检测 (`detectBpfVisiblePid()`) 在该 goroutine 中执行，检测到的 BPF PID 对应的是 SetupAgent goroutine 而非主测试 goroutine。但后续的网络连接 (HTTP 请求) 从主测试 goroutine 发出，BPF 看到的是不同的 PID。
+
+另一个问题: `getExpectedPidU64()` 在测试结构体参数求值时调用，此时 `StartAgent` 尚未运行，PID 检测尚未执行，返回 userspace PID 而非 BPF PID。
+
+**修复 (三层)**:
+1. `wsl2_loader.go`: 在 `detectBpfVisiblePid()` 开头添加缓存检查，避免重复检测。导出 `EnsurePidDetected()` 函数供外部调用
+2. `agent_utils_test.go` `StartAgent0()`: 在主测试 goroutine 中添加 `runtime.LockOSThread()` + `loader.EnsurePidDetected()`，确保 PID 从主 goroutine 检测
+3. `agent_utils_test.go` `getExpectedPid()`: 主动调用 `loader.EnsurePidDetected()`，确保结构体参数求值时已有正确的 BPF PID
+
+**效果**: 主测试 goroutine 锁定 OS 线程 → 从该线程检测 BPF PID → 缓存结果 → SetupAgent 复用缓存 → 后续连接从同一线程发出 → BPF 看到一致的 PID。
+
+### 21.6 修复后测试结果 (30 PASS / 4 FAIL / 0 CRASH)
+
+**通过 (30 个测试):**
+
+| 类别 | 测试 |
+|------|------|
+| 核心连接 | TestConnectSyscall, TestCloseSyscall, TestAccept, TestSubprocessConnect (新修复), TestSimpleDialOnly |
+| 数据传输 | TestRead, TestRecvFrom, TestWrite, TestSendto |
+| 网络栈 | TestDevQueueXmit, TestDevHardStartXmit, TestTracepointNetifReceiveSkb, TestIpRcvCore, TestTcpV4DoRcv, TestSkbCopyDatagramIter (新修复), TestIpXmit (新修复) |
+| IO 向量 | TestReadv, TestWritev, TestRecvmsg, TestSendMsg (均从 crash 恢复) |
+| BPF attach | TestFentryRingbuf, TestFentryTarget, TestKprobeAllCPUs, TestKprobeGeneral, TestKprobeRingbuf, TestMinimalFentry, TestMinimalFentry2, TestMinimalFentry3, TestMinimalFentry4 |
+
+**失败 (4 个，均为预期/不可修复):**
+- TestExistedConn: WSL2 根本限制 — 预先存在的连接无法被 BPF 追踪
+- TestSslRead, TestSslWrite, TestSslEventsCanRelatedToKernEvents: WSL2 无 SSL uprobe 支持，已添加优雅失败处理
+
+**测试进度历史:**
+| 时间节点 | PASS | FAIL | CRASH |
+|---------|------|------|-------|
+| §19 结束后 | 23 | 2 | ~7 |
+| §20 PID 翻译修复后 | 23 | 2 | ~7 |
+| §21.3 conntrack 修复后 | 27 | 4 | 0 |
+| §21.4-21.5 全面修复后 | **30** | **4** | **0** |
+
+### 21.7 Commits 汇总
+
+| Commit | 说明 |
+|--------|------|
+| `91e9fa6` | fix(wsl2): resolve PID translation bug and fix seq type mismatch |
+| `ebcbd86` | fix(build): add pid_check.bpf.o compilation to make build-bpf |
+| `8b38281` | fix(bpf): use BPF comm field for FilterComm exec event matching |
+| `40df98f` | fix(agent): resolve conntrack nil pointer crash and SSL test panics |
+
+### 21.8 剩余工作
+
+1. **TestExistedConn**: WSL2 根本限制，无法追踪预先存在的连接，建议在 WSL2 环境下 skip
+2. **SSL tests ×3**: WSL2 无 uprobe 支持，已有优雅失败处理，在原生 Linux 环境应能通过
+3. **FilterComm 初始扫描路径**: `setAndValidateParameters()` 中按 comm 名称扫描已有进程时仍使用用户态 PID (exec 事件路径已修复)

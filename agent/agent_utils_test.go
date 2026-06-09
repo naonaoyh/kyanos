@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,8 +40,11 @@ import (
 // getExpectedPid returns the PID that should appear in BPF events.
 // On WSL2, bpf_get_current_pid_tgid() returns a different PID than os.Getpid().
 // After the agent starts, the detected BPF-visible PID is available via loader.GetBpfVisiblePid().
+// We also proactively trigger PID detection here because test assertion structs
+// are evaluated as function arguments BEFORE StartAgent runs.
 func getExpectedPid() uint32 {
 	if loader.IsWSL2() {
+		loader.EnsurePidDetected()
 		bpfPid := loader.GetBpfVisiblePid()
 		if bpfPid != 0 {
 			return bpfPid
@@ -62,6 +66,19 @@ func StartAgent0(bpfAttachFunctions []bpf.AttachBpfProgFunction,
 	connManagerInitHook func(*conn.ConnManager),
 	agentStopper chan os.Signal,
 	useSelfPidAsFitler bool) {
+
+	// On WSL2, different goroutines in the same process can have different
+	// BPF-visible TGIDs. We lock the calling goroutine (the test goroutine
+	// that will also make network connections) to its OS thread and pre-detect
+	// the BPF-visible PID from here. This ensures:
+	// 1. The detected PID matches the one BPF sees for subsequent connections
+	// 2. When SetupAgent's goroutine calls detectBpfVisiblePid() again,
+	//    it gets the cached result instead of detecting a different PID
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if loader.IsWSL2() {
+		loader.EnsurePidDetected()
+	}
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
