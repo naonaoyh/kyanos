@@ -276,7 +276,7 @@ func AssertKernEvent(t *testing.T, kernEvt *bpf.AgentKernEvt, conditions KernDat
 	}
 	seq := kernEvt.Seq
 	if !conditions.ignoreSeq {
-		assert.Equal(t, conditions.seq, seq)
+		assert.Equal(t, uint64(conditions.seq), uint64(seq))
 	}
 	step := kernEvt.Step
 	if !conditions.ignoreStep {

@@ -21,6 +21,11 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 )
 
+// pid_check.bpf.o is compiled from bpfsrc/pid_check.bpf.c.
+// To rebuild: clang -g -O2 -target bpf -D__TARGET_ARCH_x86_64
+//   -I../../vmlinux/x86/ -I../../.output/
+//   -c bpfsrc/pid_check.bpf.c -o pid_check.bpf.o
+//
 //go:embed pid_check.bpf.o
 var pidCheckBpfO []byte
 

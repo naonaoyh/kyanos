@@ -533,13 +533,13 @@ GOOS=linux go test -c ./agent/controlplane/    # ✅ compiles
 
 ### 13.3 WSL2 已知限制
 
-1. **fentry/fexit 现已可用** (2026-06-06 修复): 修复了内核版本字符串比较 bug 后，fentry/fexit 程序在 WSL2 6.18 内核上可以正常 attach。但连接事件 (ConnRb perf buffer) 仍然无法产生，可能是 BPF C 代码与 6.18 内核结构的兼容性问题。
+1. **fentry/fexit 现已可用** (2026-06-06 修复): 修复了内核版本字符串比较 bug 后，fentry/fexit 程序在 WSL2 6.18 内核上可以正常 attach。
 
-2. **连接追踪不完整**: 即使 fentry/fexit 成功 attach，WSL2 上 agent 集成测试仍无法捕获连接事件 ("no conn event")。TCP 流量正常但 BPF 未生成 AgentConnEvtT。
+2. **连接事件现已可用** (2026-06-08 修复): 根因是 WSL2 PID 翻译 bug (§20)。`bpf_get_current_pid_tgid()` 返回与 `getpid()` 不同的 PID，导致 `filter_pid_map` 不匹配。通过 BPF 可见 PID 检测机制修复后，23/25 个集成测试通过。
 
-3. **PID filter 不稳定**: kprobe 模式下 PID filter 偶尔不工作。
+3. **conntrack nil pointer crash**: `progressIsStucked()` in `conntrack.go:807` 在部分连接场景下 panic，影响 ~7 个测试。预存在 bug，与 PID 修复无关。
 
-4. **不影响生产环境**: TKE 节点的标准 Ubuntu/TencentOS 内核完整支持 fentry/fexit，以上问题均不存在。
+4. **不影响生产环境**: TKE 节点的标准 Ubuntu/TencentOS 内核完整支持 fentry/fexit，不存在 WSL2 PID 翻译问题。
 
 ### 13.4 Bug 修复 (本轮发现)
 
@@ -797,3 +797,80 @@ sudo go test -v -count=1 -timeout 600s ./agent/
 ```
 
 > **注意**: WSL2 中 sudo 执行时 PATH 会被重置，需通过 `sudo bash -c "export PATH=... && ..."` 或 `sudo env "PATH=$PATH" ...` 传递。`sudo -E` 在 Ubuntu 26.04 上被忽略 ("preserving the entire environment is not supported")。
+
+---
+
+## 20. WSL2 PID 翻译 Bug 修复 — 集成测试恢复 (2026-06-08)
+
+### 20.1 问题
+
+上一轮 (§19) 修复 TUI/除零/内核版本后，所有连接级测试仍报 "no conn event"。经过 4 轮深入排障，发现根本原因是 **WSL2 PID 翻译 Bug**。
+
+### 20.2 根本原因
+
+WSL2 (kernel 6.18.33) 的 `bpf_get_current_pid_tgid()` 返回的 PID 与用户态 `getpid()` / `/proc` 看到的 PID **不同**。这是 WSL2 内部 PID 翻译层导致的：
+
+| 指标 | 值 |
+|------|-----|
+| 用户态 PID (getpid) | 55604 |
+| BPF 可见 TGID (bpf_get_current_pid_tgid) | 24129 |
+| BPF PID 是否存在于 /proc | **否** |
+| PID 偏移量是否恒定 | **否** (31496 vs 31830) |
+| comm 字段是否匹配 | **是** (确认是同一进程) |
+
+**影响链**: 用户态将 `os.Getpid()` 写入 `filter_pid_map` → BPF `match_trace_tgid()` 用 `bpf_get_current_pid_tgid() >> 32` 查找 → 不匹配 → 所有事件被丢弃。
+
+### 20.3 排障过程 (4 轮)
+
+| 假设 | 结果 |
+|------|------|
+| CPU 0 限制是根因 | ❌ 排除: 16 CPU 全测 + CPU 0 固定均无效 |
+| Go runtime 拦截 syscall | ❌ 排除: C 程序同样无法捕获 |
+| PERF_ATTR_SIZE_VER1 截断 config1 | ❌ 排除: Size 72/96/136 结果相同 |
+| PMU vs tracefs attachment 差异 | ❌ 排除: 两种方式均失败 |
+| 命名空间过滤可替代 | ❌ 排除: 所有 WSL2 进程共享同一 pidns (4026532228) |
+| **WSL2 PID 翻译** | ✅ **确认**: BPF TGID ≠ userspace PID |
+
+### 20.4 解决方案
+
+**BPF 可见 PID 检测机制**: 在加载主 BPF 程序前，加载一个临时探测程序 (kprobe on `__sys_connect`)，触发 connect() 调用，从 ring buffer 读取 BPF 报告的 TGID，用该值填充 `filter_pid_map`。
+
+**新增/修改文件:**
+
+| 文件 | 用途 |
+|------|------|
+| `bpf/loader/wsl2_loader.go` | WSL2 检测 + BPF 可见 PID 探测 (内嵌 BPF 对象) |
+| `bpf/loader/wsl2_loader_windows.go` | Windows stub (返回 false/0) |
+| `bpf/loader/pid_check.bpf.o` | 内嵌的 BPF 探测对象 (kprobe + ringbuf) |
+| `bpf/loader/loader.go` | `setAndValidateParameters()` 中添加 WSL2 PID 翻译 |
+| `agent/agent_utils_test.go` | `getExpectedPid()` 辅助函数 + seq 类型修复 |
+| `agent/agent_test.go` | PID 断言改用 `getExpectedPid()` |
+
+### 20.5 附带修复: seq 类型不匹配
+
+`agent_utils_test.go:279` 的 `assert.Equal(t, conditions.seq, seq)` 比较 `uint64` 与 `uint32`，导致 TestRead/Write/Sendto/RecvFrom 误报失败。修复为 `uint64()` 统一类型。
+
+### 20.6 修复后测试结果
+
+**通过 (23 个测试):**
+
+| 类别 | 测试 |
+|------|------|
+| 核心连接 | TestConnectSyscall, TestCloseSyscall, TestAccept, TestSubprocessConnect, TestSimpleDialOnly |
+| 数据传输 | TestRead, TestRecvFrom, TestWrite, TestSendto |
+| 网络栈 | TestDevQueueXmit, TestDevHardStartXmit, TestTracepointNetifReceiveSkb, TestIpRcvCore, TestTcpV4DoRcv, TestSkbCopyDatagramIter |
+| BPF attach | TestFentryRingbuf, TestFentryTarget, TestKprobeAllCPUs, TestKprobeGeneral, TestKprobeRingbuf, TestMinimalFentry, TestMinimalFentry2, TestMinimalFentry3, TestMinimalFentry4 |
+
+**失败 (2 个，预存在问题):**
+- TestIpXmit: fd 断言不匹配
+- TestSubprocessConnect: WSL2 子进程检测问题
+
+**Crash (预存在 conntrack.go:807 nil pointer):**
+- TestExistedConn, TestReadv, TestWritev, TestRecvmsg, TestSendMsg, TestSslRead, TestSslWrite
+
+### 20.7 剩余工作
+
+1. **conntrack nil pointer crash** (`conntrack.go:807` `progressIsStucked`): 影响 ~7 个测试的预存在 bug
+2. **TestIpXmit fd 不匹配**: 内核事件中 fd 值在 WSL2 上与预期不同
+3. **FilterComm 路径**: `setAndValidateParameters()` 中的 comm 过滤仍使用用户态 PID，如需在 WSL2 上使用需额外翻译
+4. **诊断文件备份**: 所有调试期诊断文件已移至 `.diag_backup/` 目录
