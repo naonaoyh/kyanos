@@ -1,6 +1,6 @@
 # Kyanos GNSS 专项开发 — 交接文档
 
-> 最后更新: 2026-06-09 (WSL2 集成测试全面修复: 构建可移植性 + conntrack crash + 多 goroutine PID + 30/34 通过)
+> 最后更新: 2026-06-09 (WSL2 兼容性加固: skip 不支持的测试 + conntrack nil 守卫 + 统一 WSL2 检测 + 代码清理)
 > 分支: `feat/gnss-ntrip-rtcm-support`
 > 仓库: `https://github.com/naonaoyh/kyanos.git`
 > 上游: `https://github.com/hengyoush/kyanos` (原始 Kyanos 项目)
@@ -981,6 +981,72 @@ actual  : 0x3786  (14214, BPF PID)
 
 ### 21.8 剩余工作
 
-1. **TestExistedConn**: WSL2 根本限制，无法追踪预先存在的连接，建议在 WSL2 环境下 skip
-2. **SSL tests ×3**: WSL2 无 uprobe 支持，已有优雅失败处理，在原生 Linux 环境应能通过
-3. **FilterComm 初始扫描路径**: `setAndValidateParameters()` 中按 comm 名称扫描已有进程时仍使用用户态 PID (exec 事件路径已修复)
+1. ~~**TestExistedConn**: WSL2 根本限制~~ → **已在 §22 添加 t.Skip()**
+2. ~~**SSL tests ×3**: WSL2 无 uprobe 支持~~ → **已在 §22 添加 t.Skip()**
+3. ~~**FilterComm 初始扫描路径**: 按 comm 扫描已有进程时使用用户态 PID~~ → **已在 §22 添加 WSL2 skip**
+
+---
+
+## 22. WSL2 兼容性加固与代码质量优化 (2026-06-09)
+
+### 22.1 测试 WSL2 Skip 处理
+
+为 4 个在 WSL2 下无法运行的测试添加 `t.Skip()`:
+- `TestExistedConn`: WSL2 无法追踪 BPF attach 之前已建立的连接
+- `TestSslRead`, `TestSslWrite`, `TestSslEventsCanRelatedToKernEvents`: WSL2 内核无 uprobe 支持
+
+**修改文件**: `agent/agent_test.go`
+
+### 22.2 FilterComm 初始扫描 WSL2 保护
+
+`setAndValidateParameters()` 中按 comm 名称扫描已有进程时，使用 `/proc` 的用户态 PID。在 WSL2 上这与 BPF 可见的 PID 不同，导致过滤无效。
+
+**修复**: 在 WSL2 上跳过初始扫描，仅依赖 exec 事件路径（已使用 BPF 提供的 comm 和 PID）。
+
+**修改文件**: `bpf/loader/loader.go`
+
+### 22.3 conntrack nil 守卫
+
+`progressIsStucked()` 和 `checkProgress()` 访问 `ac.Options.MaxAllowStuckTimeMills`。虽然 `SetupAgent()` 现在会设置 `ac.Options`，但为防御起见，添加了 nil 检查并在 `Options` 为 nil 时使用默认值 1000ms。
+
+**修改文件**: `agent/conn/conntrack.go`
+
+### 22.4 WSL2 检测统一
+
+将 `loader.isWSL2()` 委托给 `common.IsWSL()`，避免重复实现。同时增强 `common.IsWSL()` 以同时检查 `/proc/version` 中的 "microsoft" 和 "wsl" 字符串（后者覆盖较新的 WSL2 内核版本）。
+
+**修改文件**: `common/env_detect.go`, `bpf/loader/wsl2_loader.go`
+
+### 22.5 代码清理
+
+- **拼写修复**: `isProcNameMacthed` → `isProcNameMatched` (3 处)
+- **死代码清理**: 移除 `bpf/map.go` 中注释掉的 `GetMap`/`GetMapByObjs` 函数 (34 行)
+- **Makefile 修复**: `VMLINUX` 和 `INCLUDES` 改用递归展开 (`=`) 确保 `$(ARCH)` 在使用时已正确赋值
+
+**修改文件**: `bpf/loader/loader.go`, `bpf/map.go`, `Makefile`
+
+### 22.6 其他 .gitignore 更新
+
+添加调试/诊断产物到 `.gitignore`:
+- `.diag_backup/`
+- `.serena/`, `.spec-workflow/`, `.tmp/`
+- `*.log`, 临时脚本 (`check_version.sh`, `diag_*.sh` 等)
+
+### 22.7 修复后测试结果
+
+**30 PASS / 0 FAIL / 4 SKIP**
+
+| 类别 | 状态 | 测试 |
+|------|------|------|
+| 核心连接 | ✅ PASS × 5 | TestConnectSyscall, TestCloseSyscall, TestAccept, TestSubprocessConnect, TestSimpleDialOnly |
+| 数据传输 | ✅ PASS × 4 | TestRead, TestRecvFrom, TestWrite, TestSendto |
+| 网络栈 | ✅ PASS × 7 | TestDevQueueXmit, TestDevHardStartXmit, TestTracepointNetifReceiveSkb, TestIpRcvCore, TestTcpV4DoRcv, TestSkbCopyDatagramIter, TestIpXmit |
+| IO 向量 | ✅ PASS × 4 | TestReadv, TestWritev, TestRecvmsg, TestSendMsg |
+| BPF attach | ✅ PASS × 10 | TestFentryRingbuf, TestFentryTarget, TestKprobeAllCPUs, TestKprobeGeneral, TestKprobeRingbuf, TestMinimalFentry × 5 |
+| WSL2 限制 | ⏭️ SKIP × 4 | TestExistedConn, TestSslRead, TestSslWrite, TestSslEventsCanRelatedToKernEvents |
+
+### 22.8 Commits 汇总 (本轮)
+
+| Commit | 说明 |
+|--------|------|
+| `000e087` | refactor: harden WSL2 compatibility — skip unsupported tests, fix conntrack nil guard, consolidate WSL2 detection |
