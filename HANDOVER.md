@@ -1,9 +1,13 @@
 # Kyanos GNSS 专项开发 — 交接文档
 
-> 最后更新: 2026-06-09 (WSL2 兼容性加固: skip 不支持的测试 + conntrack nil 守卫 + 统一 WSL2 检测 + 代码清理)
-> 分支: `feat/gnss-ntrip-rtcm-support`
+> 最后更新: 2026-06-18 (§23: Phase 10 部署交付物补全 + 上游同步 OpenSSL 3.6 / 1.6.0 + TKE 部署验证规划; 文档状态对齐)
+> 分支: `feat/gnss-ntrip-rtcm-support` (worktree: `claude/vibrant-franklin-4fbedb`)
+> 当前 HEAD: `927a52f` (工作树干净)
 > 仓库: `https://github.com/naonaoyh/kyanos.git`
-> 上游: `https://github.com/hengyoush/kyanos` (原始 Kyanos 项目)
+> 上游: `https://github.com/hengyoush/kyanos` (原始 Kyanos 项目; 2026-06-17 已同步至 release 1.6.0)
+>
+> 📌 **状态速查**: Phase 1-9 ✅ 全部完成; Phase 10 (K8s 部署) 🔧 配置就绪，未实地验证。
+> 下一步阻塞在 **5.4.241 内核 eBPF 兼容性实地验证** — 详见 `docs/TKE_DEPLOYMENT_VERIFICATION_PLAN.md` (DRAFT, 待审批)。
 
 ---
 
@@ -61,7 +65,7 @@
 | 7 | gRPC 通信层与 Agent 改造 | **已完成** (必需任务全部完成; 可选PBT测试未做; cilium/ebpf升级v0.17.1) |
 | 8 | Web Console 后端 | **已完成** (gRPC server, REST API, WebSocket, diagnostics) |
 | 9 | Web Console 前端 | **已完成** (Vue 3 + Vite + Element Plus) |
-| 10 | K8s 部署与集成测试 | **部分** (Helm Chart + DaemonSet + Dockerfile 就绪; 待 TKE 集群验证) |
+| 10 | K8s 部署与集成测试 | **🔧 配置就绪，未实地验证** (Agent+Console Dockerfile、Helm Chart ×2、部署脚本 ×3、TKE 部署指南、验证规划就绪；待 5.4 内核实地验证 — 见 §23/§14) |
 
 ---
 
@@ -101,8 +105,8 @@ Phase 5 包含 6 个排障场景 (S1-S6) + 诊断评分 + CLI 集成:
 | `agent/session/tcp_health.go` | 新建 | **已完成** (785行) |
 | `agent/session/scoring.go` | 新建 | **未独立** (Score() 在 types.go 中实现) |
 | `agent/session/tracker_test.go` | 新建 | **已完成** (1118行) |
-| `cmd/watch.go` | 修改 | **未开始** |
-| `cmd/stat.go` | 修改 | **未开始** |
+| `cmd/watch.go` | 修改 | **已完成** (诊断 flags 经 `cmd/common.go` 的 `addSessionDiagnosisFlags`/`initSessionDiagnosis` 注册，见 ROADMAP_NEXT §T3) |
+| `cmd/stat.go` | 修改 | **已完成** (`--group-by` 增加 `ntrip-user`，见 ROADMAP_NEXT §T3) |
 
 ---
 
@@ -110,11 +114,16 @@ Phase 5 包含 6 个排障场景 (S1-S6) + 诊断评分 + CLI 集成:
 
 ### 4.1 Git 状态
 
+> ⚠️ 本节为 **2026-06-03 快照**，保留作历史参考。当前状态见 §23。
+> **当前 (2026-06-18)**: 分支 `feat/gnss-ntrip-rtcm-support`，HEAD `927a52f`，**工作树干净**（无未提交变更）。
+
 - **分支**: `feat/gnss-ntrip-rtcm-support`
 - **最近提交**: `54551ce fix(test): resolve agent integration test hangs and kernel version detection`
 - **未提交变更**: ntrip filter/struct 微调, run_quick_test.sh 改进 (非关键)
 
 ### 4.2 未提交的文件变更
+
+> ⚠️ 本节为 **2026-06-03 快照**。下列文件**已全部提交**（多数在 `ac44a76` Phase 5 finalize、`bc0c174` Phase 1-4 中）。当前工作树干净，无未提交/未跟踪的业务文件。
 
 **已修改 (Modified):**
 - `agent/protocol/ntrip/ntrip.go` — GGA 解析增加 DiffAge/DiffStationID
@@ -134,12 +143,16 @@ Phase 5 包含 6 个排障场景 (S1-S6) + 诊断评分 + CLI 集成:
 
 ### 4.3 测试统计
 
+> 更新至 2026-06-18。
+
 | 包 | 测试数 | 文件 |
 |----|--------|------|
-| `agent/session` | **130** | types_test(58) + tracker_test(37) + tcp_health_test(35) |
-| `agent/protocol/ntrip` | **73** | ntrip_test.go |
-| `agent/protocol/rtcm` | **48** | rtcm_test(38) + epoch_test(10) |
-| **总计** | **251** | |
+| `agent/session` | **154** | types/tracker/tcp_health/pod_load/report/jsonl/leapseconds 等 |
+| `agent/protocol/ntrip` | **79** | ntrip_test.go |
+| `agent/protocol/rtcm` | **55** | rtcm_test + epoch_test + leapseconds_test |
+| `console` (Phase 8) | **93** | store/api/grpc_server/websocket/report/types/filestore |
+| `agent/controlplane` (Phase 7) | **36** | 单元 + 属性测试 |
+| **总计** | **417** | (Phase 7 的 29 个可选 PBT 测试仍未实现，见 §12.5) |
 
 ### 4.4 代码规模
 
@@ -553,16 +566,25 @@ GOOS=linux go test -c ./agent/controlplane/    # ✅ compiles
 
 ## 14. TKE 部署就绪状态
 
+> 更新至 2026-06-18。配置全部就绪，未在真实 TKE 集群实地部署验证。
+
 | 组件 | 文件 | 状态 |
 |------|------|------|
-| Agent Dockerfile | `deploy/Dockerfile` | ✅ 就绪 |
-| Agent Helm Chart | `deploy/helm/kyanos-agent/` | ✅ 就绪 |
-| Console Helm Chart | `deploy/helm/kyanos-console/` | ✅ 就绪 |
-| 测试 NTRIP Pod | `deploy/test-ntrip-pod.yaml` | ✅ 就绪 |
-| 部署指南 (英文) | `deploy/README.md` | ✅ 就绪 |
-| 部署指南 (中文) | `deploy/README_CN.md` | ✅ 就绪 |
+| Agent Dockerfile | `deploy/Dockerfile` | ✅ 多阶段构建 (golang→build-bpf+btfgen→ubuntu:22.04, 66MB 静态二进制) |
+| Console Dockerfile | `console/Dockerfile` | ✅ 多阶段构建 (Vue 前端 dist + Go 后端) |
+| Agent Helm Chart | `deploy/helm/kyanos-agent/` | ✅ daemonset + rbac + configmap + helpers |
+| Console Helm Chart | `deploy/helm/kyanos-console/` | ✅ deployment + service + ingress + pvc + sa |
+| TKE 专用 values | `deploy/values-tke.yaml`, `values-tke-console.yaml` | ✅ (CCR 命名空间占位符待填) |
+| 测试 NTRIP Pod | `deploy/test-ntrip-pod.yaml` | ✅ fake-ntrip-caster + ntrip-test-client |
+| 部署脚本 | `deploy/scripts/build-and-push.sh`, `preflight-check.sh`, `quick-deploy.sh` | ✅ 含 root 自动提权 + 预检 |
+| 部署指南 (英文) | `deploy/README.md` | ✅ |
+| 部署指南 (中文) | `deploy/README.md`, `deploy/README_CN.md` | ✅ |
+| 部署说明书 (详细) | `deploy/TKE_DEPLOYMENT_GUIDE.md` | ✅ 0.2.0, 含 TLS/Ingress/COS/故障排查 |
+| **部署验证规划** | `docs/TKE_DEPLOYMENT_VERIFICATION_PLAN.md` | ⚠️ **DRAFT, 待审批** — 分阶段 A/B/C/D 可回滚方案 |
 
-**待办**: 配置 TKE kubeconfig + Docker 环境后即可一键部署验证。
+**当前阻塞项**: 跳板机编译/冒烟用内核 **6.6.110**，生产 TKE 节点是 **5.4.241**，跨度大。代码有 v5d4 profile (kprobe fallback / perf_buffer 替代 ringbuf / `ip_rcv_core.isra` backup) 理论兼容，但**从未在真实 5.4 内核实跑**。验证规划 Phase A 的 A1+A2 (隔离 TencentOS 3.1 CVM 冒烟) 为最高危未决项。
+
+**待办 (验证规划批准后)**: 按规划 Phase A (离线预检) → B (单节点) → C (positioning 18 节点) → D (全量 76 节点) 顺序执行。
 
 </content>
 </file>
@@ -1050,3 +1072,70 @@ actual  : 0x3786  (14214, BPF PID)
 | Commit | 说明 |
 |--------|------|
 | `000e087` | refactor: harden WSL2 compatibility — skip unsupported tests, fix conntrack nil guard, consolidate WSL2 detection |
+
+---
+
+## 23. Phase 10 部署交付物补全 + 上游同步 + 部署验证规划 (2026-06-09 → 2026-06-17)
+
+> §22 之后至 HEAD (`927a52f`) 的进展。代码侧 Phase 1-9 无功能性新增；本轮主要是 **Phase 10 部署配置补全**、**上游同步**、**部署验证规划**，以及若干稳定性修复与工程清理。
+
+### 23.1 Phase 10 部署交付物补全
+
+| Commit | 内容 |
+|--------|------|
+| `0230b15` | feat(deploy): 新增 TKE 部署指南、**Console Dockerfile**、部署支持 (values-tke*.yaml, 测试 Pod) |
+| `f967e2d` | fix(deploy): 加固部署脚本、修复 Helm chart、改进 TKE 部署指南 |
+| `cd863f8` | refactor(tests): 清理冗余脚本、修复 bug、为预检脚本添加 root 自动提权 |
+| `143f03d` | chore: 为所有 shell 脚本设置可执行位 + 新增 `.gitattributes` |
+
+**新增交付物** (详见 §14):
+- `console/Dockerfile` — Console 多阶段构建 (Vue dist + Go 后端)
+- `deploy/scripts/build-and-push.sh` / `preflight-check.sh` / `quick-deploy.sh` — 一键构建推送、节点 eBPF 预检、快速部署
+- `deploy/values-tke.yaml` / `values-tke-console.yaml` — TKE 专用 values 覆盖
+- `deploy/TKE_DEPLOYMENT_GUIDE.md` — 详细部署说明书 (v0.2.0, 含 TLS/Ingress/COS/故障排查)
+
+### 23.2 稳定性修复
+
+| Commit | 内容 |
+|--------|------|
+| `ac88328` | fix(tui): 修复查看 record 详情时 Req/Resp 为 nil 的崩溃 (与 §22 的单向协议修复相关) |
+
+### 23.3 上游同步 (hengyoush:main)
+
+| Commit | 内容 |
+|--------|------|
+| `682ac2b` | fix: 支持 OpenSSL 3.6.x (上游 PR #342) |
+| `2d71401` | docs: 更新 release 1.6.0 文档 (上游) |
+| `801deff` | ci: renovate 跳过 test workflow (上游 #344) |
+| `443dd44` | Merge branch 'hengyoush:main' — 整体同步至上游 release 1.6.0 |
+
+### 23.4 部署验证规划 (DRAFT)
+
+| Commit | 内容 |
+|--------|------|
+| `927a52f` | docs: 新增 `docs/TKE_DEPLOYMENT_VERIFICATION_PLAN.md` (618 行) + 更新 `.gitignore` |
+
+**规划要点** (详见该文档):
+- 🔴 **高危**: 生产 TKE 集群 76 节点 / 103+ Pod / 内核 **5.4.241**，与跳板机 6.6.110 差距大
+- **分 4 阶段可回滚**: A 离线预检 (零生产影响) → B 单节点 → C positioning 18 节点 → D 全量 76 节点
+- **最高危未决项 (P0)**: 5.4 内核 eBPF 兼容性 — 必须在隔离 TencentOS 3.1 CVM 上验证 (Phase A 的 A1+A2)
+- **9 个决策审批点** 需 yuanhong 确认后方可推进
+- 已通过 `kubectl debug node` 只读确认: TKE 节点 `CONFIG_DEBUG_INFO_BTF=y` / `CONFIG_BPF_SYSCALL=y` / 无 `CONFIG_BPF_TRAMP` (fentry 不可用，需走 kprobe fallback)
+
+### 23.5 当前精确状态 (2026-06-18)
+
+| 维度 | 状态 |
+|------|------|
+| 代码 Phase 1-9 | ✅ 全部完成，已推送 |
+| Phase 10 部署配置 | ✅ 全部就绪 (Dockerfile ×2 + Helm ×2 + 脚本 ×3 + values + 指南 + 验证规划) |
+| WSL2 端到端 | ✅ 30 PASS / 0 FAIL / 4 SKIP |
+| 跳板机编译 (6.6.110) | ✅ `make build-bpf && make` + 冒烟通过 |
+| TKE 节点实地验证 (5.4.241) | ❌ **未做** — 验证规划待审批 |
+| Phase 7 可选 PBT (29 个) | ❌ 未实现 (非阻塞) |
+| 工作树 | ✅ 干净 (HEAD `927a52f`) |
+
+### 23.6 下一步 (待 yuanhong 决策)
+
+1. **审批 TKE 部署验证规划** (`docs/TKE_DEPLOYMENT_VERIFICATION_PLAN.md`)
+2. 批准后执行 **Phase A** — 创建隔离 TencentOS 3.1 CVM，在真实 5.4.241 内核冒烟 (解决最高危内核兼容性未知项)
+3. 或：先补 Phase 7 的 29 个可选 PBT 测试 / T3 遗留的 CLI 渲染通道 (`--auth-log` 等)

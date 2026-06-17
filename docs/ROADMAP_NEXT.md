@@ -805,3 +805,69 @@ npm run build  # 生产构建 → dist/
 1. **WebSocket 前端集成**: ✅ 已完成。`composables/useWebSocket.js` 提供可复用 composable；SessionExplorer、SessionDetail、Report 均已接入 WebSocket 实时更新。
 2. **虚拟滚动**: Session 列表和 Timeline 未实现虚拟滚动（Element Plus `el-table-v2` 可后续集成）
 3. **国际化**: 当前全英文 UI，后续可加 i18n
+
+---
+
+## 14. Phase 10: K8s 部署 🔧 配置就绪，未实地验证 (2026-06-09 → 2026-06-17)
+
+### 14.1 状态
+
+Phase 1-9 全部完成（§10-§13）。Phase 10 的**部署配置全部就绪**，但**未在真实 TKE 集群实地部署验证**。当前阻塞在内核兼容性的实地验证。
+
+### 14.2 交付物清单
+
+| 类别 | 文件 | 状态 |
+|------|------|------|
+| Agent 镜像 | `deploy/Dockerfile` | ✅ 多阶段 (golang→build-bpf+btfgen→ubuntu:22.04) |
+| Console 镜像 | `console/Dockerfile` | ✅ 多阶段 (Vue dist + Go 后端) |
+| Agent Helm Chart | `deploy/helm/kyanos-agent/` (daemonset/rbac/configmap/_helpers) | ✅ |
+| Console Helm Chart | `deploy/helm/kyanos-console/` (deployment/service/ingress/pvc/sa) | ✅ |
+| TKE 专用 values | `deploy/values-tke.yaml`, `deploy/values-tke-console.yaml` | ✅ (CCR 占位符待填) |
+| 部署脚本 | `deploy/scripts/build-and-push.sh`, `preflight-check.sh`, `quick-deploy.sh` | ✅ 含 root 自动提权 + 预检 |
+| 测试 NTRIP 流量 | `deploy/test-ntrip-pod.yaml` (fake-caster + client) | ✅ |
+| 部署指南 | `deploy/TKE_DEPLOYMENT_GUIDE.md` (v0.2.0), `deploy/README.md`, `README_CN.md` | ✅ |
+| **部署验证规划** | `docs/TKE_DEPLOYMENT_VERIFICATION_PLAN.md` | ⚠️ DRAFT, 待审批 |
+
+### 14.3 本轮 Commits
+
+| Commit | 内容 |
+|--------|------|
+| `0230b15` | feat(deploy): TKE 部署指南 + Console Dockerfile + 部署支持 |
+| `cd863f8` | refactor(tests): 清理冗余脚本 + 预检脚本 root 自动提权 |
+| `f967e2d` | fix(deploy): 加固脚本、修 Helm chart、改进 TKE 指南 |
+| `ac88328` | fix(tui): record 详情 Req/Resp nil 崩溃修复 |
+| `143f03d` | chore: shell 脚本可执行位 + `.gitattributes` |
+| `443dd44` | Merge upstream: OpenSSL 3.6.x + release 1.6.0 docs |
+| `927a52f` | docs: TKE 部署验证规划 (618 行) + `.gitignore` |
+
+### 14.4 核心阻塞项 (P0)
+
+**内核兼容性未实地验证**:
+- 跳板机编译/冒烟用内核 **6.6.110** (TencentOS 4.4)，已通过
+- 生产 TKE 节点内核 **5.4.241** (TencentOS 3.1)，**从未实跑**
+- 代码有 v5d4 profile 兼容设计 (kprobe fallback / perf_buffer 替代 ringbuf / `ip_rcv_core.isra` backup / `SupportFentry=false`)，理论兼容
+- 已只读确认 TKE 节点: `CONFIG_DEBUG_INFO_BTF=y`、`CONFIG_BPF_SYSCALL=y`、`CONFIG_BPF_TRAMP` 未启用 (fentry 不可用)
+- btfgen BTF archive 不含 TencentOS，但节点内置 BTF 可用（仅在 BTF 损坏时无法回退）
+
+### 14.5 验证路径 (待审批后执行)
+
+按 `TKE_DEPLOYMENT_VERIFICATION_PLAN.md` 分 4 阶段可回滚执行:
+
+```
+Phase A (离线预检, 零生产影响)
+  A1 创建隔离 TencentOS 3.1 CVM (¥0.2/h, 用完即销毁)  ← 最高危未决项入口
+  A2 真实 5.4 内核 eBPF 冒烟 (8 项: 加载/kprobe/perf_buffer/ip_rcv_core/CO-RE/HTTP/资源/优雅退出)
+  A3-A7 内核符号预检 / 镜像构建扫描 / Helm 服务端 dry-run / 最小权限审计 / 76 节点 BTF 完整性
+Phase B (单节点, 1 节点)
+Phase C (positioning 标签, 18 节点, 24h 稳定性观察)
+Phase D (全量, 76 节点)
+```
+
+**9 个决策审批点** 需 yuanhong 确认。详见验证规划文档 §8。
+
+### 14.6 非 Phase 10 的剩余项 (非阻塞)
+
+- Phase 7 的 **29 个可选 PBT 测试** (tasks.md 中 `[ ]*` 项) — 纯逻辑增强，不影响功能
+- T3 遗留 CLI 渲染通道: `--auth-log` / `--auth-fail-only` / `--diag-score` / `--fps` (依赖诊断结果输出/渲染，归入后续渲染集成)
+- Session 列表/事件时间线的**虚拟滚动** (§13.4)
+- 前端 **i18n** (§13.4)
