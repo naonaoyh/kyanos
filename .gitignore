@@ -65,3 +65,15 @@ bpf/btfgen.sh
 agent/testdata/bpftrace_*.sh
 agent/testdata/bpftool_*.sh
 agent/testdata/check_cpu.sh
+
+# SSH helper scripts (contain env-var credentials, never commit)
+ssh_helper.py
+ssh_helper_pty.py
+
+# TKE deployment automation scripts (contain env-var credentials, never commit)
+tke_phase_a_cvm.py
+cvm_info.json
+phase_a_test_results.json
+
+# WorkBuddy workspace data (local only)
+.workbuddy/
