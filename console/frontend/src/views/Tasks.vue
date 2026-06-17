@@ -22,82 +22,7 @@ const statusType = (s) => {
   return map[s] || 'info'
 }
 
-const sockets = {} // taskId -> WebSocket
-
-const connectTaskWS = (taskId) => {
-  if (sockets[taskId]) return
-  
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.host
-  const url = `${protocol}//${host}/api/v1/ws/tasks/${taskId}`
-  
-  const ws = new WebSocket(url)
-  sockets[taskId] = ws
-  
-  ws.onopen = () => {
-    console.log('WebSocket connected for task:', taskId)
-  }
-  
-  ws.onmessage = (event) => {
-    try {
-      const msg = JSON.parse(event.data)
-      if (msg.type === 'task_status') {
-        const updatedTask = msg.data
-        if (!updatedTask) return
-        
-        const idx = tasks.value.findIndex(t => t.id === updatedTask.id)
-        if (idx !== -1) {
-          tasks.value[idx] = updatedTask
-        }
-        
-        if (updatedTask.status !== 'running') {
-          closeTaskWS(updatedTask.id)
-        }
-      }
-    } catch (e) {
-      console.error('Failed to parse task WS message:', e)
-    }
-  }
-  
-  ws.onclose = () => {
-    console.log('WebSocket closed for task:', taskId)
-    delete sockets[taskId]
-  }
-  
-  ws.onerror = (err) => {
-    console.error('WebSocket error for task:', taskId, err)
-    ws.close()
-  }
-}
-
-const closeTaskWS = (taskId) => {
-  if (sockets[taskId]) {
-    sockets[taskId].close()
-    delete sockets[taskId]
-  }
-}
-
-const closeAllTaskWS = () => {
-  Object.keys(sockets).forEach(id => {
-    closeTaskWS(id)
-  })
-}
-
-const syncWebSockets = () => {
-  // Close unneeded sockets
-  Object.keys(sockets).forEach(id => {
-    const task = tasks.value.find(t => t.id === id)
-    if (!task || task.status !== 'running') {
-      closeTaskWS(id)
-    }
-  })
-  // Connect needed sockets
-  tasks.value.forEach(t => {
-    if (t.status === 'running') {
-      connectTaskWS(t.id)
-    }
-  })
-}
+// ---- Task lifecycle ----
 
 const loadTasks = async () => {
   loading.value = true
@@ -139,11 +64,81 @@ const handleStop = async (taskId) => {
   }
 }
 
-onMounted(loadTasks)
+// Restart: re-create with the same parameters as a stopped/completed/failed task.
+const handleRestart = async (task) => {
+  try {
+    await ElMessageBox.confirm(
+      `Restart task ${task.id}? A new task will be created with the same parameters.`,
+      'Confirm Restart',
+      { type: 'info' }
+    )
+    const payload = {
+      target_pod: task.target_pod,
+      target_namespace: task.target_namespace || 'gnss-production',
+      duration_seconds: task.duration_seconds || 3600,
+      mountpoints: (task.ntrip_filter && task.ntrip_filter.mountpoints) || [],
+      usernames: (task.ntrip_filter && task.ntrip_filter.usernames) || [],
+      export_pcap: task.export_pcap || false,
+      export_parsed: task.export_parsed !== false,
+    }
+    const { data } = await createTask(payload)
+    ElMessage.success(`Task ${data.task_id} created (restart of ${task.id})`)
+    await loadTasks()
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error('Failed to restart task: ' + (e.response?.data?.error || e.message))
+  }
+}
 
-onUnmounted(() => {
-  closeAllTaskWS()
-})
+// Toggle: stop if running; restart if not running.
+const handleToggle = async (task) => {
+  if (task.status === 'running') {
+    await handleStop(task.id)
+  } else {
+    await handleRestart(task)
+  }
+}
+
+// ---- WebSocket (unchanged) ----
+const sockets = {}
+
+const syncWebSockets = () => {
+  Object.keys(sockets).forEach(id => {
+    if (!tasks.value.find(t => t.id === id && t.status === 'running')) closeTaskWS(id)
+  })
+  tasks.value.forEach(t => { if (t.status === 'running') connectTaskWS(t.id) })
+}
+
+const connectTaskWS = (taskId) => {
+  if (sockets[taskId]) return
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const url = `${protocol}//${window.location.host}/api/v1/ws/tasks/${taskId}`
+  const ws = new WebSocket(url)
+  sockets[taskId] = ws
+  ws.onopen = () => {}
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data)
+      if (msg.type === 'task_status' && msg.data) {
+        const idx = tasks.value.findIndex(t => t.id === msg.data.id)
+        if (idx !== -1) tasks.value[idx] = msg.data
+        if (msg.data.status !== 'running') closeTaskWS(msg.data.id)
+      }
+    } catch (e) { console.error('WS parse', e) }
+  }
+  ws.onclose = () => { delete sockets[taskId] }
+  ws.onerror = () => { ws.close() }
+}
+
+const closeTaskWS = (taskId) => {
+  if (sockets[taskId]) { sockets[taskId].close(); delete sockets[taskId] }
+}
+
+const closeAllTaskWS = () => {
+  Object.keys(sockets).forEach(closeTaskWS)
+}
+
+onMounted(loadTasks)
+onUnmounted(closeAllTaskWS)
 </script>
 
 <template>
@@ -171,17 +166,37 @@ onUnmounted(() => {
           {{ row.duration_seconds ? (row.duration_seconds / 60).toFixed(0) + 'm' : '-' }}
         </template>
       </el-table-column>
-      <el-table-column label="Actions" width="100" align="center">
+      <el-table-column label="Actions" width="180" align="center">
         <template #default="{ row }">
-          <el-button
-            v-if="row.status === 'running'"
-            type="danger"
-            size="small"
-            link
-            @click="handleStop(row.id)"
-          >
-            Stop
-          </el-button>
+          <div class="action-btns">
+            <!-- Running tasks: show Stop + toggle off -->
+            <template v-if="row.status === 'running'">
+              <el-tooltip content="Stop capture" placement="top">
+                <el-button size="small" type="danger" circle @click.stop="handleStop(row.id)">
+                  <el-icon><VideoPause /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </template>
+
+            <!-- Stopped / completed / failed: show Restart + toggle on -->
+            <template v-else>
+              <el-tooltip content="Restart with same parameters" placement="top">
+                <el-button size="small" type="primary" circle @click.stop="handleRestart(row)">
+                  <el-icon><VideoPlay /></el-icon>
+                </el-button>
+              </el-tooltip>
+            </template>
+
+            <!-- Toggle switch: enable = restart stopped, disable = stop running -->
+            <el-tooltip :content="row.status === 'running' ? 'Disable' : 'Enable'" placement="top">
+              <el-switch
+                :model-value="row.status === 'running'"
+                size="small"
+                @click.stop
+                @change="() => handleToggle(row)"
+              />
+            </el-tooltip>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -227,4 +242,10 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 h2 { margin: 0; }
+.action-btns {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
 </style>
