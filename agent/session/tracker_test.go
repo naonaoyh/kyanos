@@ -1221,3 +1221,89 @@ func TestTrackerRealClientIPDisabledByDefault(t *testing.T) {
 		t.Errorf("EffectiveClientIP = %q, want socket 10.0.0.250", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Correlator: CLB real-client-IP regression
+// ---------------------------------------------------------------------------
+
+// captureReconnectListener collects ReconnectEvents for assertion.
+type captureReconnectListener struct {
+	events []ReconnectEvent
+}
+
+func (l *captureReconnectListener) OnReconnect(ev ReconnectEvent) { l.events = append(l.events, ev) }
+
+// TestCorrelatorRealClientIPCLBRegression is the core motivating test for the
+// real-client-IP feature. Behind a CLB every session shares the same socket
+// peer IP (the LB's), so without real-IP resolution the correlator cannot tell
+// two different real clients apart and would never flag an IP change. With
+// RealClientIP populated, reconnect/IP-change detection works on the real
+// client identity. (Before the fix this test would fail: IPChanged=false.)
+func TestCorrelatorRealClientIPCLBRegression(t *testing.T) {
+	correlator := NewSessionCorrelator(DefaultCorrelatorConfig()) // ReconnectWindow = 60s
+	cap := &captureReconnectListener{}
+	correlator.AddListener(cap)
+
+	t0 := time.Date(2026, 6, 3, 14, 0, 0, 0, time.UTC)
+	const clbIP = "10.0.0.250" // the CLB's socket IP — identical for every client
+
+	// Session A: real client 203.0.113.7, then closed within the reconnect window.
+	a := NewNTRIPSession("a", "MOUNT", "user001", clbIP, 5001, t0)
+	closeA := t0.Add(5 * time.Second)
+	a.mu.Lock()
+	a.RealClientIP = "203.0.113.7"
+	a.ConnCloseTime = &closeA
+	a.mu.Unlock()
+	correlator.OnSessionCreated(a)
+
+	// Session B: SAME CLB socket IP, DIFFERENT real client, reconnects in-window.
+	b := NewNTRIPSession("b", "MOUNT", "user001", clbIP, 5002, t0.Add(7*time.Second))
+	b.mu.Lock()
+	b.RealClientIP = "198.51.100.9"
+	b.mu.Unlock()
+	correlator.OnSessionCreated(b)
+
+	if len(cap.events) != 1 {
+		t.Fatalf("got %d reconnect events, want 1", len(cap.events))
+	}
+	ev := cap.events[0]
+	if !ev.IPChanged {
+		t.Error("IPChanged = false, want true (different real clients behind the same CLB socket IP)")
+	}
+	if ev.OldClientIP != "203.0.113.7" {
+		t.Errorf("OldClientIP = %q, want real client 203.0.113.7", ev.OldClientIP)
+	}
+	if ev.NewClientIP != "198.51.100.9" {
+		t.Errorf("NewClientIP = %q, want real client 198.51.100.9", ev.NewClientIP)
+	}
+}
+
+// TestCorrelatorSocketOnlyCannotDistinguishCLBClients documents the exact bug
+// the feature fixes: without RealClientIP, two different real clients behind
+// the same CLB (identical socket IP) are indistinguishable, so a reconnect is
+// not flagged as an IP change. This passes today and anchors the contrast.
+func TestCorrelatorSocketOnlyCannotDistinguishCLBClients(t *testing.T) {
+	correlator := NewSessionCorrelator(DefaultCorrelatorConfig())
+	cap := &captureReconnectListener{}
+	correlator.AddListener(cap)
+
+	t0 := time.Date(2026, 6, 3, 14, 0, 0, 0, time.UTC)
+	const clbIP = "10.0.0.250"
+
+	a := NewNTRIPSession("a", "MOUNT", "user001", clbIP, 5001, t0)
+	closeA := t0.Add(5 * time.Second)
+	a.mu.Lock()
+	a.ConnCloseTime = &closeA // RealClientIP intentionally empty (feature disabled)
+	a.mu.Unlock()
+	correlator.OnSessionCreated(a)
+
+	b := NewNTRIPSession("b", "MOUNT", "user001", clbIP, 5002, t0.Add(7*time.Second))
+	correlator.OnSessionCreated(b)
+
+	if len(cap.events) != 1 {
+		t.Fatalf("got %d reconnect events, want 1", len(cap.events))
+	}
+	if cap.events[0].IPChanged {
+		t.Error("IPChanged = true, want false — same CLB socket IP and no real IP to distinguish clients")
+	}
+}
