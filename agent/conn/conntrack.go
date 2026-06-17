@@ -540,14 +540,6 @@ func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernE
 		}
 	}
 	headerEvt := extractHeaderEvent(data, ke, c)
-	if c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && len(data) > 0 {
-		peekLen := len(data)
-		if peekLen > 10 {
-			peekLen = 10
-		}
-		common.ConntrackLog.Warnf("[NTRIP-ROUTE] %s isReq=%v data[0]=%02x peek=%x seq=%d",
-			c.ToString(), isReq, data[0], data[:peekLen], ke.Seq)
-	}
 	if isReq {
 		if headerEvt != nil {
 			c.reqStreamBuffer.Add(uint64(headerEvt.SyscallEvent.Ke.Seq), headerEvt.Buf, getEventTimestamp(ke, c, isReq))
@@ -672,19 +664,6 @@ func (c *Connection4) parseStreamBuffer(streamBuffer *buffer.StreamBuffer, messa
 	}
 	stop := false
 	startPos := parser.FindBoundary(streamBuffer, messageType, 0)
-	// Debug: log NTRIP response buffer state to diagnose RTCM detection
-	if c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && messageType != protocol.Request {
-		head := streamBuffer.Head()
-		if head != nil {
-			buf := head.Buffer()
-			peekLen := len(buf)
-			if peekLen > 30 {
-				peekLen = 30
-			}
-			common.ConntrackLog.Warnf("[NTRIP-RESP] %s startPos=%d headLen=%d peek=%x proto=%d role=%d msgType=%d",
-				c.ToString(), startPos, head.Len(), buf[:peekLen], c.Protocol, c.Role, messageType)
-		}
-	}
 	if startPos == -1 {
 		// TODO
 		startPos = 0
@@ -699,15 +678,6 @@ func (c *Connection4) parseStreamBuffer(streamBuffer *buffer.StreamBuffer, messa
 	// var parseState protocol.ParseState
 	for !stop && !streamBuffer.IsEmpty() {
 		parseResult := parser.ParseStream(streamBuffer, messageType)
-		if c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && messageType != protocol.Request {
-			head := streamBuffer.Head()
-			headLen := 0
-			if head != nil {
-				headLen = head.Len()
-			}
-			common.ConntrackLog.Warnf("[NTRIP-PARSE] %s state=%d readBytes=%d msgs=%d headLen=%d",
-				c.ToString(), parseResult.ParseState, parseResult.ReadBytes, len(parseResult.ParsedMessages), headLen)
-		}
 		// parseState = parseResult.ParseState
 		switch parseResult.ParseState {
 		case protocol.Success:

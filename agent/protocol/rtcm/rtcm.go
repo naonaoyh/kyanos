@@ -8,6 +8,7 @@ import (
 	"kyanos/agent/buffer"
 	"kyanos/agent/protocol"
 	"kyanos/bpf"
+	"time"
 )
 
 // Compile-time interface checks
@@ -169,7 +170,10 @@ func (p *RTCMStreamParser) ParseStream(
 	seq := head.LeftBoundary()
 	ts, ok := streamBuffer.FindTimestampBySeq(seq)
 	if !ok {
-		return protocol.ParseResult{ParseState: protocol.Ignore}
+		// After RemovePrefix shifts the buffer position, the old timestamp
+		// entries may have been cleaned up. Use a fallback: the current time
+		// as a reasonable approximation for the frame timestamp.
+		ts = uint64(time.Now().UnixNano())
 	}
 
 	// Build the RTCMFrame
