@@ -65,6 +65,7 @@ func (h *APIHandler) registerRoutes() {
 	// Session queries.
 	h.mux.HandleFunc("GET /api/v1/sessions", h.listSessions)
 	h.mux.HandleFunc("GET /api/v1/sessions/{id}", h.getSession)
+	h.mux.HandleFunc("DELETE /api/v1/sessions/{id}", h.deleteSession)
 	h.mux.HandleFunc("GET /api/v1/sessions/{id}/events", h.getSessionEvents)
 	h.mux.HandleFunc("GET /api/v1/sessions/{id}/report", h.getSessionReport)
 
@@ -294,6 +295,17 @@ func (h *APIHandler) getSessionEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	events := h.store.ListEvents(id)
 	writeJSON(w, http.StatusOK, listResponse{Items: events, Total: len(events)})
+}
+
+func (h *APIHandler) deleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := h.store.DeleteSession(id); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete session: "+err.Error())
+		return
+	}
+	// Broadcast removal so the Session Explorer can react immediately.
+	h.hub.BroadcastSessionListChange("deleted", &SessionRecord{SessionID: id})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "session_id": id})
 }
 
 func (h *APIHandler) getSessionReport(w http.ResponseWriter, r *http.Request) {

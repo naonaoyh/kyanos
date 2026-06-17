@@ -1,8 +1,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { listSessions } from '../api'
+import { listSessions, deleteSession } from '../api'
 import { useWebSocket } from '../composables/useWebSocket'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const sessions = ref([])
 const loading = ref(false)
@@ -55,6 +56,21 @@ const goDetail = (id) => {
   router.push(`/sessions/${id}`)
 }
 
+const handleDelete = async (id) => {
+  try {
+    await ElMessageBox.confirm(
+      `Delete session ${id}? This cannot be undone.`,
+      'Confirm',
+      { type: 'warning', confirmButtonText: 'Delete', cancelButtonText: 'Cancel' }
+    )
+    await deleteSession(id)
+    sessions.value = sessions.value.filter(s => s.session_id !== id)
+    ElMessage.success(`Session ${id} deleted`)
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error('Failed to delete session')
+  }
+}
+
 // WebSocket for real-time session list updates
 const wsUrl = () => {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -67,17 +83,17 @@ useWebSocket(wsUrl, {
     const session = msg.data
 
     if (msg.type === 'session_list_closed') {
-      // Update existing session status
       const idx = sessions.value.findIndex(s => s.session_id === session.session_id)
       if (idx !== -1) {
         sessions.value[idx] = { ...sessions.value[idx], ...session, closed: true }
       }
+    } else if (msg.type === 'session_list_deleted') {
+      sessions.value = sessions.value.filter(s => s.session_id !== session.session_id)
     } else if (msg.type === 'session_list_updated') {
       const idx = sessions.value.findIndex(s => s.session_id === session.session_id)
       if (idx !== -1) {
         sessions.value[idx] = { ...sessions.value[idx], ...session }
       } else {
-        // New session we haven't seen before
         sessions.value.unshift(session)
       }
     }
@@ -113,9 +129,7 @@ onMounted(loadSessions)
       :data="sessions"
       v-loading="loading"
       stripe
-      @row-click="(row) => goDetail(row.session_id)"
       class="session-table"
-      row-class-name="clickable-row"
     >
       <el-table-column prop="session_id" label="Session ID" min-width="200" show-overflow-tooltip />
       <el-table-column prop="mountpoint" label="Mountpoint" width="140" />
@@ -136,6 +150,13 @@ onMounted(loadSessions)
           </el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="Actions" width="80" align="center">
+        <template #default="{ row }">
+          <el-tooltip content="Delete session" placement="top">
+            <el-button size="small" type="danger" :icon="Delete" circle @click.stop="handleDelete(row.session_id)" />
+          </el-tooltip>
+        </template>
+      </el-table-column>
     </el-table>
   </div>
 </template>
@@ -150,5 +171,5 @@ onMounted(loadSessions)
 }
 h2 { margin: 0; }
 .filter-bar { margin-bottom: 16px; }
-.session-table { cursor: pointer; }
+.clickable-row { cursor: pointer; }
 </style>

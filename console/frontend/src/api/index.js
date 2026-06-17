@@ -19,6 +19,7 @@ export const getSession = (id) => api.get(`/sessions/${id}`)
 export const getSessionEvents = (id) => api.get(`/sessions/${id}/events`)
 export const getSessionReport = (id, format = 'json') =>
   api.get(`/sessions/${id}/report`, { params: { format } })
+export const deleteSession = (id) => api.delete(`/sessions/${id}`)
 
 // --- Agents & Topology ---
 
