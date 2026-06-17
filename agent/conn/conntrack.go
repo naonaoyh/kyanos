@@ -511,6 +511,9 @@ func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernE
 	addedToBuffer := false
 	isReq, _ := isReq(c, ke)
 	if c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && len(data) > 0 {
+		if common.ConntrackLog.Level >= logrus.DebugLevel {
+			common.ConntrackLog.Debugf("[NTRIP-DIR] %s origIsReq=%v data[0]=%02x len=%d", c.ToString(), isReq, data[0], len(data))
+		}
 		if data[0] == '$' {
 			isReq = true
 		} else if data[0] == 0xD3 && len(data) >= 3 && (data[1]&0xFC) == 0x00 {
@@ -538,6 +541,9 @@ func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernE
 				}
 			}
 		}
+	}
+	if common.ConntrackLog.Level >= logrus.DebugLevel && c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && len(data) > 0 {
+		common.ConntrackLog.Debugf("[NTRIP-DIR] %s finalIsReq=%v data[0]=%02x", c.ToString(), isReq, data[0])
 	}
 	headerEvt := extractHeaderEvent(data, ke, c)
 	if isReq {
