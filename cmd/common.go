@@ -161,6 +161,15 @@ func initSessionDiagnosis(cmd *cobra.Command) {
 	if tcp, err := cmd.Flags().GetBool("tcp-health"); err == nil && tcp {
 		cfg.EnableTCPHealth = true
 	}
+	// Real client IP behind a load balancer (CLB): only honored when explicitly
+	// enabled; defaults to the X-Forwarded-For header.
+	if rcip, err := cmd.Flags().GetBool("real-client-ip"); err == nil && rcip {
+		header := "X-Forwarded-For"
+		if h, err := cmd.Flags().GetString("real-client-ip-header"); err == nil && h != "" {
+			header = h
+		}
+		cfg.RealClientIPHeader = header
+	}
 
 	options.SessionDiagnosisEnable = true
 	options.SessionTrackerConfig = cfg
@@ -326,6 +335,10 @@ func addSessionDiagnosisFlags(cmd *cobra.Command) {
 		"Print a per-session diagnostic report (login/GGA/RTCM/network/score) when each session closes (requires --diag)")
 	cmd.Flags().String("diag-jsonl", "",
 		"Export one structured session-summary JSON object per line to this file as sessions close (requires --diag)")
+	cmd.Flags().Bool("real-client-ip", false,
+		"Resolve the real client IP behind a load balancer (CLB) from request headers (requires --diag)")
+	cmd.Flags().String("real-client-ip-header", "X-Forwarded-For",
+		"Header to trust for the real client IP when --real-client-ip is set (X-Forwarded-For or X-Real-IP)")
 	cmd.Flags().Int("leap-seconds", 0,
 		"Override the GPS-UTC leap second offset for RTCM epoch latency (0 = use built-in default 18)")
 	cmd.Flags().String("pcap-output", "",

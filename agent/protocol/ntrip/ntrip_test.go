@@ -676,6 +676,49 @@ func TestParseStreamGETRequest(t *testing.T) {
 	}
 }
 
+func TestParseStreamForwardedHeaders(t *testing.T) {
+	// A CLB/load balancer injects X-Forwarded-For (client chain) and/or
+	// X-Real-IP. The parser must surface both so the session tracker can
+	// resolve the real client IP behind the LB.
+	data := "GET /MOUNT01 HTTP/1.1\r\n" +
+		"Host: ntrip.example.com\r\n" +
+		"X-Forwarded-For: 203.0.113.7, 10.0.0.1\r\n" +
+		"X-Real-IP: 203.0.113.7\r\n" +
+		"\r\n"
+	sb := makeStreamBuffer([]byte(data))
+	p := &NTRIPStreamParser{}
+
+	result := p.ParseStream(sb, protocol.Request)
+	if result.ParseState != protocol.Success {
+		t.Fatalf("expected Success, got %v", result.ParseState)
+	}
+	req := result.ParsedMessages[0].(*NTRIPRequest)
+	if req.ForwardedFor != "203.0.113.7, 10.0.0.1" {
+		t.Errorf("ForwardedFor = %q, want the raw client chain", req.ForwardedFor)
+	}
+	if req.XRealIP != "203.0.113.7" {
+		t.Errorf("XRealIP = %q, want 203.0.113.7", req.XRealIP)
+	}
+}
+
+func TestParseStreamForwardedHeadersAbsent(t *testing.T) {
+	data := "GET /MOUNT01 HTTP/1.1\r\nHost: ntrip.example.com\r\n\r\n"
+	sb := makeStreamBuffer([]byte(data))
+	p := &NTRIPStreamParser{}
+
+	result := p.ParseStream(sb, protocol.Request)
+	if result.ParseState != protocol.Success {
+		t.Fatalf("expected Success, got %v", result.ParseState)
+	}
+	req := result.ParsedMessages[0].(*NTRIPRequest)
+	if req.ForwardedFor != "" {
+		t.Errorf("ForwardedFor = %q, want empty when header absent", req.ForwardedFor)
+	}
+	if req.XRealIP != "" {
+		t.Errorf("XRealIP = %q, want empty when header absent", req.XRealIP)
+	}
+}
+
 func TestParseStreamSOURCERequest(t *testing.T) {
 	data := "SOURCE mypassword /TESTMOUNT\r\nSource-Agent: NTRIP test\r\n\r\n"
 	sb := makeStreamBuffer([]byte(data))

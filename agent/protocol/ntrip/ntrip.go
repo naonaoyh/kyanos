@@ -47,9 +47,17 @@ type NTRIPRequest struct {
 	Password    string           // Extracted password (from Basic auth or SOURCE method)
 	UserAgent   string           // Client User-Agent string
 	ContentType string           // Content-Type header (v2 POST may carry gnss/data)
-	ClientIP    string
-	ClientPort  uint16
-	ConnKey     string
+	// ForwardedFor is the raw X-Forwarded-For header value (may be a
+	// comma-separated client chain). Populated unconditionally so the session
+	// tracker can resolve the real client IP behind a load balancer (CLB/LB).
+	// Empty when the header is absent. See agent/session resolveRealClientIP.
+	ForwardedFor string
+	// XRealIP is the raw X-Real-IP header value, an alternative single-value
+	// real-client-IP signal some LBs inject. Empty when absent.
+	XRealIP    string
+	ClientIP   string
+	ClientPort uint16
+	ConnKey    string
 }
 
 func (r *NTRIPRequest) IsReq() bool                 { return true }
@@ -74,6 +82,12 @@ func (r *NTRIPRequest) FormatToString() string {
 	}
 	if r.ContentType != "" {
 		result += fmt.Sprintf("\n  Content-Type: %s", r.ContentType)
+	}
+	if r.ForwardedFor != "" {
+		result += fmt.Sprintf("\n  X-Forwarded-For: %s", r.ForwardedFor)
+	}
+	if r.XRealIP != "" {
+		result += fmt.Sprintf("\n  X-Real-IP: %s", r.XRealIP)
 	}
 	return result
 }
@@ -156,7 +170,7 @@ type NTRIPRTCMFrame struct {
 }
 
 func (f *NTRIPRTCMFrame) IsReq() bool                 { return !f.isResp }
-func (f *NTRIPRTCMFrame) SetIsResp(v bool)             { f.isResp = v }
+func (f *NTRIPRTCMFrame) SetIsResp(v bool)            { f.isResp = v }
 func (f *NTRIPRTCMFrame) StreamId() protocol.StreamId { return 0 }
 
 func (f *NTRIPRTCMFrame) FormatToString() string {
@@ -578,6 +592,10 @@ func (p *NTRIPStreamParser) parseRequest(
 		Password:    password,
 		UserAgent:   mimeHeader.Get("User-Agent"),
 		ContentType: mimeHeader.Get("Content-Type"),
+		// Load-balancer (CLB) real-client-IP signals. Extracted unconditionally;
+		// the session tracker decides whether/which to trust based on config.
+		ForwardedFor: mimeHeader.Get("X-Forwarded-For"),
+		XRealIP:      mimeHeader.Get("X-Real-IP"),
 	}
 
 	return protocol.ParseResult{

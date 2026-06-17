@@ -50,7 +50,7 @@ func (a *sessionTrackerDiagAdapter) DiagSnapshots() []watch.DiagSessionSnapshot 
 			SessionID:  s.SessionID,
 			MountPoint: s.MountPoint,
 			Username:   s.Username,
-			ClientIP:   s.ClientIP,
+			ClientIP:   s.EffectiveClientIP(),
 			ClientRole: s.ClientRole,
 			Duration:   s.Duration(),
 			IsActive:   s.IsActive(),

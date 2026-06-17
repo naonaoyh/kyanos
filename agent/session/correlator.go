@@ -44,7 +44,7 @@ func (c *SessionCorrelator) AddListener(l CorrelatorListener) {
 func (c *SessionCorrelator) OnSessionCreated(s *NTRIPSession) {
 	s.mu.RLock()
 	username := s.Username
-	clientIP := s.ClientIP
+	clientIP := effectiveIP(s.RealClientIP, s.ClientIP)
 	startTime := s.ConnStartTime
 	s.mu.RUnlock()
 
@@ -64,7 +64,7 @@ func (c *SessionCorrelator) OnSessionCreated(s *NTRIPSession) {
 	// Check if this is a reconnection
 	prev.mu.RLock()
 	prevClose := prev.ConnCloseTime
-	prevIP := prev.ClientIP
+	prevIP := effectiveIP(prev.RealClientIP, prev.ClientIP)
 	prev.mu.RUnlock()
 
 	if prevClose == nil {
@@ -133,12 +133,12 @@ func (c *SessionCorrelator) ReconnectEvents(username string) []ReconnectEvent {
 
 		prev.mu.RLock()
 		prevClose := prev.ConnCloseTime
-		prevIP := prev.ClientIP
+		prevIP := effectiveIP(prev.RealClientIP, prev.ClientIP)
 		prev.mu.RUnlock()
 
 		curr.mu.RLock()
 		currStart := curr.ConnStartTime
-		currIP := curr.ClientIP
+		currIP := effectiveIP(curr.RealClientIP, curr.ClientIP)
 		curr.mu.RUnlock()
 
 		if prevClose == nil {

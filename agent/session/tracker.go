@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +68,12 @@ type TrackerConfig struct {
 	EnableTCPHealth bool
 	// TCPHealthConfig tunes the TCP health analyzer (used when EnableTCPHealth is true).
 	TCPHealthConfig TCPHealthConfig
+	// RealClientIPHeader, when non-empty, enables extracting the real client IP
+	// behind a load balancer (CLB) from the named HTTP request header
+	// ("X-Forwarded-For" or "X-Real-IP") and storing it on the session's
+	// RealClientIP. Empty (default) disables extraction; EffectiveClientIP()
+	// then falls back to the socket peer IP. See resolveRealClientIP.
+	RealClientIPHeader string
 }
 
 // DefaultTrackerConfig returns sensible defaults.
@@ -84,6 +91,40 @@ func DefaultTrackerConfig() TrackerConfig {
 		EnableTCPHealth:       false, // opt-in: enable for deep network analysis
 		TCPHealthConfig:       DefaultTCPHealthConfig(),
 	}
+}
+
+// resolveRealClientIP extracts a validated client IP from an NTRIP request's
+// load-balancer forwarding headers, according to the configured header name.
+//
+//   - "X-Forwarded-For": the header may carry a comma-separated client chain
+//     ("client, proxy1, proxy2"); the leftmost entry is the original client.
+//     Only that first token is used (proxies appended afterwards are not trusted).
+//   - "X-Real-IP": a single IP value.
+//
+// The chosen value is validated with net.ParseIP; an unparseable or empty
+// value yields "" (caller then leaves RealClientIP unset and EffectiveClientIP
+// falls back to the socket IP). Header name matching is case-insensitive.
+func resolveRealClientIP(req *ntrip.NTRIPRequest, header string) string {
+	if header == "" || req == nil {
+		return ""
+	}
+	var raw string
+	switch strings.ToLower(strings.TrimSpace(header)) {
+	case "x-forwarded-for":
+		raw = req.ForwardedFor
+		if i := strings.IndexByte(raw, ','); i >= 0 {
+			raw = raw[:i] // leftmost = original client
+		}
+	case "x-real-ip":
+		raw = req.XRealIP
+	default:
+		return ""
+	}
+	raw = strings.TrimSpace(raw)
+	if net.ParseIP(raw) == nil {
+		return ""
+	}
+	return raw
 }
 
 // SessionListener receives callbacks on session lifecycle events.
@@ -357,6 +398,15 @@ func (t *SessionTracker) handleNTRIPRequest(req *ntrip.NTRIPRequest, resp protoc
 	s := t.getOrCreateSession(clientIP, clientPort, mountPoint, req.Username, conn.ServerIP(), reqTime)
 
 	s.mu.Lock()
+
+	// Real client IP behind a load balancer (CLB): extract from the request's
+	// forwarding header when configured. First observation wins so a later
+	// request on the same connection can't flip the identity.
+	if s.RealClientIP == "" && t.config.RealClientIPHeader != "" {
+		if realIP := resolveRealClientIP(req, t.config.RealClientIPHeader); realIP != "" {
+			s.RealClientIP = realIP
+		}
+	}
 
 	// 识别并标记 NTRIP 会话中各端角色身份
 	if req.Method == ntrip.MethodSource || req.Method == ntrip.MethodPost {
@@ -797,5 +847,3 @@ func (t *SessionTracker) CloseAll(closeTime time.Time) {
 		t.notifyEventClose(s)
 	}
 }
-
-

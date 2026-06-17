@@ -23,18 +23,21 @@ import (
 // SessionSummaryJSON is a flat, self-contained JSON view of a finalized
 // session. Field names are stable and snake_case for easy consumption.
 type SessionSummaryJSON struct {
-	Type      string `json:"type"` // always "session_summary"
-	SessionID string `json:"session_id"`
-	Mount     string `json:"mount,omitempty"`
-	Username  string `json:"username,omitempty"`
-	Version   string `json:"ntrip_version,omitempty"`
+	Type       string `json:"type"` // always "session_summary"
+	SessionID  string `json:"session_id"`
+	Mount      string `json:"mount,omitempty"`
+	Username   string `json:"username,omitempty"`
+	Version    string `json:"ntrip_version,omitempty"`
 	ClientRole string `json:"client_role,omitempty"`
 	ServerRole string `json:"server_role,omitempty"`
 
 	ClientIP   string `json:"client_ip"`
 	ClientPort uint16 `json:"client_port"`
-	ServerPod  string `json:"server_pod,omitempty"`
-	ServerIP   string `json:"server_ip,omitempty"`
+	// SocketIP is the raw socket peer IP (the LB's IP behind a load balancer).
+	// Preserved for traceability; client_ip is the effective (real) client IP.
+	SocketIP  string `json:"socket_ip"`
+	ServerPod string `json:"server_pod,omitempty"`
+	ServerIP  string `json:"server_ip,omitempty"`
 
 	StartTime  time.Time  `json:"start_time"`
 	CloseTime  *time.Time `json:"close_time,omitempty"`
@@ -114,7 +117,8 @@ func SessionSummaryFromSession(s *NTRIPSession, cfg ReportConfig) SessionSummary
 		Version:    s.NTRIPVersion,
 		ClientRole: s.ClientRole,
 		ServerRole: s.ServerRole,
-		ClientIP:   s.ClientIP,
+		ClientIP:   effectiveIP(s.RealClientIP, s.ClientIP),
+		SocketIP:   s.ClientIP,
 		ClientPort: s.ClientPort,
 		ServerPod:  s.ServerPod,
 		ServerIP:   s.ServerIP,

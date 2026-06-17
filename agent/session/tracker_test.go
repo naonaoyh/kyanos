@@ -1116,3 +1116,108 @@ func TestTrackerCongestionCorrelation(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Real client IP behind a load balancer (CLB)
+// ---------------------------------------------------------------------------
+
+func TestResolveRealClientIP(t *testing.T) {
+	req := &ntrip.NTRIPRequest{
+		ForwardedFor: "203.0.113.7, 10.0.0.1", // client chain: original first
+		XRealIP:      "198.51.100.42",
+	}
+	cases := []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{"xff leftmost", "X-Forwarded-For", "203.0.113.7"},
+		{"xff case-insensitive", "x-forwarded-for", "203.0.113.7"},
+		{"x-real-ip", "X-Real-IP", "198.51.100.42"},
+		{"disabled when empty header", "", ""},
+		{"unknown header", "X-Custom", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveRealClientIP(req, tc.header); got != tc.want {
+				t.Errorf("resolveRealClientIP(%q) = %q, want %q", tc.header, got, tc.want)
+			}
+		})
+	}
+
+	// Unparseable / empty values are rejected (fall back to socket IP upstream).
+	bad := &ntrip.NTRIPRequest{ForwardedFor: "not-an-ip"}
+	if got := resolveRealClientIP(bad, "X-Forwarded-For"); got != "" {
+		t.Errorf("resolveRealClientIP with garbage = %q, want empty", got)
+	}
+}
+
+func TestResolveRealClientIPNilSafe(t *testing.T) {
+	if got := resolveRealClientIP(nil, "X-Forwarded-For"); got != "" {
+		t.Errorf("resolveRealClientIP(nil) = %q, want empty", got)
+	}
+}
+
+func TestEffectiveClientIP(t *testing.T) {
+	s := NewNTRIPSession("sid", "MOUNT", "u", "10.0.0.1", 5000, time.Now())
+	if got := s.EffectiveClientIP(); got != "10.0.0.1" {
+		t.Errorf("EffectiveClientIP (no real IP) = %q, want socket 10.0.0.1", got)
+	}
+	s.mu.Lock()
+	s.RealClientIP = "203.0.113.7"
+	s.mu.Unlock()
+	if got := s.EffectiveClientIP(); got != "203.0.113.7" {
+		t.Errorf("EffectiveClientIP (with real IP) = %q, want 203.0.113.7", got)
+	}
+}
+
+// TestTrackerRealClientIPExtraction: behind a CLB the socket peer is the LB's
+// IP; with --real-client-ip the tracker must record the forwarded real IP and
+// EffectiveClientIP must prefer it, while ClientIP (lifecycle key) stays the
+// socket IP.
+func TestTrackerRealClientIPExtraction(t *testing.T) {
+	cfg := DefaultTrackerConfig()
+	cfg.RealClientIPHeader = "X-Forwarded-For"
+	tracker := NewSessionTracker(cfg)
+
+	// Server-side conn: socket peer (RemoteIP) is the CLB IP.
+	conn := makeConnInfo("10.0.0.1", "10.0.0.250", 2101, 54321)
+	ts := uint64(time.Date(2026, 6, 3, 14, 0, 0, 0, time.UTC).UnixNano())
+
+	req := makeNTRIPRequest(ts, "MOUNT-A", "user001", "secret", true)
+	req.ForwardedFor = "203.0.113.7, 10.0.0.1" // real client + a proxy hop
+	tracker.OnRecord(protocol.Record{Req: req}, conn)
+
+	s := tracker.AllSessions()[0]
+	if s.RealClientIP != "203.0.113.7" {
+		t.Errorf("RealClientIP = %q, want 203.0.113.7 (leftmost XFF)", s.RealClientIP)
+	}
+	if s.ClientIP != "10.0.0.250" {
+		t.Errorf("ClientIP = %q, want socket 10.0.0.250 (lifecycle key unchanged)", s.ClientIP)
+	}
+	if got := s.EffectiveClientIP(); got != "203.0.113.7" {
+		t.Errorf("EffectiveClientIP = %q, want 203.0.113.7", got)
+	}
+}
+
+// TestTrackerRealClientIPDisabledByDefault: without --real-client-ip the
+// behaviour is identical to before — RealClientIP stays empty and
+// EffectiveClientIP falls back to the socket IP.
+func TestTrackerRealClientIPDisabledByDefault(t *testing.T) {
+	tracker := NewSessionTracker(DefaultTrackerConfig()) // RealClientIPHeader = ""
+
+	conn := makeConnInfo("10.0.0.1", "10.0.0.250", 2101, 54321)
+	ts := uint64(time.Date(2026, 6, 3, 14, 0, 0, 0, time.UTC).UnixNano())
+
+	req := makeNTRIPRequest(ts, "MOUNT-A", "user001", "secret", true)
+	req.ForwardedFor = "203.0.113.7"
+	tracker.OnRecord(protocol.Record{Req: req}, conn)
+
+	s := tracker.AllSessions()[0]
+	if s.RealClientIP != "" {
+		t.Errorf("RealClientIP = %q, want empty (feature disabled)", s.RealClientIP)
+	}
+	if got := s.EffectiveClientIP(); got != "10.0.0.250" {
+		t.Errorf("EffectiveClientIP = %q, want socket 10.0.0.250", got)
+	}
+}

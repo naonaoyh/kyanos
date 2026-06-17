@@ -30,6 +30,12 @@ type NTRIPSession struct {
 	UserAgent    string // Client User-Agent string
 	ClientIP     string
 	ClientPort   uint16
+	// RealClientIP is the load-balancer-forwarded real client IP (extracted
+	// from X-Forwarded-For / X-Real-IP), when --real-client-ip is enabled.
+	// Empty means: feature disabled, or no forwarding header was observed.
+	// ClientIP above stays the socket peer IP (used for connection lifecycle
+	// matching) — see EffectiveClientIP().
+	RealClientIP string
 	ServerPod    string // DS Pod handling this connection (empty if not in K8s mode)
 	ServerNode   string // Node where DS Pod runs
 	ServerIP     string // Server-side IP; used as pod-load fallback key when ServerPod is empty
@@ -142,6 +148,30 @@ func (s *NTRIPSession) GGAEventCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.GGAEvents)
+}
+
+// EffectiveClientIP returns the client IP to use for semantic identity
+// (cross-session correlation, unique-client aggregation, display, export).
+// Behind a load balancer (CLB), ClientIP is the LB's socket IP and identical
+// across all real clients, so we prefer the forwarded RealClientIP when it is
+// set. Callers that already hold s.mu should read the fields directly.
+//
+// ClientIP (the socket peer) is NOT changed and remains the key for connection
+// lifecycle matching (getOrCreateSession / OnConnectionClose / findSessionByClient).
+func (s *NTRIPSession) EffectiveClientIP() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return effectiveIP(s.RealClientIP, s.ClientIP)
+}
+
+// effectiveIP returns realIP when non-empty, otherwise socketIP. It is a
+// lock-free helper for callers that already hold the session's mutex; use
+// EffectiveClientIP() when not holding the lock.
+func effectiveIP(realIP, socketIP string) string {
+	if realIP != "" {
+		return realIP
+	}
+	return socketIP
 }
 
 // RTCMFrameRate returns the average RTCM frames-per-second over the session's

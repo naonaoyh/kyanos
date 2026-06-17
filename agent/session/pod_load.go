@@ -104,7 +104,7 @@ func (p *PodLoadAnalyzer) OnSessionCreated(s *NTRIPSession) {
 
 	s.mu.RLock()
 	sessionID := s.SessionID
-	clientIP := s.ClientIP
+	clientIP := effectiveIP(s.RealClientIP, s.ClientIP)
 	s.mu.RUnlock()
 
 	p.mu.Lock()
@@ -170,7 +170,7 @@ func (p *PodLoadAnalyzer) Snapshot() []PodStats {
 				stats.ActiveSessions++
 				stats.FrameRate += s.RTCMFrameRate()
 				s.mu.RLock()
-				cip := s.ClientIP
+				cip := effectiveIP(s.RealClientIP, s.ClientIP)
 				s.mu.RUnlock()
 				if cip != "" {
 					clients[cip] = struct{}{}

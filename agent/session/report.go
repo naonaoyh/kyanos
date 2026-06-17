@@ -55,7 +55,9 @@ func FormatSessionReport(s *NTRIPSession, cfg ReportConfig) string {
 	username := s.Username
 	password := s.Password
 	version := s.NTRIPVersion
-	clientIP := s.ClientIP
+	clientIP := effectiveIP(s.RealClientIP, s.ClientIP)
+	socketIP := s.ClientIP
+	realClientIPSet := s.RealClientIP != ""
 	clientPort := s.ClientPort
 	serverPod := s.ServerPod
 	serverIP := s.ServerIP
@@ -82,6 +84,9 @@ func FormatSessionReport(s *NTRIPSession, cfg ReportConfig) string {
 	writeLine("========== NTRIP Session Diagnostic Report ==========")
 	writeLine("Session:    %s", sessionID)
 	writeLine("Client:     %s:%d", clientIP, clientPort)
+	if realClientIPSet && socketIP != clientIP {
+		writeLine("  (real IP via LB header; socket peer was %s)", socketIP)
+	}
 	if clientRole != "" {
 		writeLine("Client Role: %s", clientRole)
 	}
