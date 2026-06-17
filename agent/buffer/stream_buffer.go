@@ -316,7 +316,8 @@ func (b *Buffer) RemovePrefix(len int) {
 		b.buf = b.buf[len:]
 		b.seq += uint64(len)
 	} else if b.Len() == len {
-		return
+		b.buf = b.buf[:0]
+		b.seq += uint64(len)
 	} else {
 		panic("try to remove size greater than me")
 	}
