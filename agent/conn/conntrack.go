@@ -663,7 +663,7 @@ func (c *Connection4) parseStreamBuffer(streamBuffer *buffer.StreamBuffer, messa
 		// TODO
 		startPos = 0
 	}
-	isRTCMDebug := c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && messageType == protocol.Response
+	isRTCMDebug := c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP
 	if isRTCMDebug && streamBuffer.Head() != nil {
 		head := streamBuffer.Head().Buffer()
 		first3 := make([]byte, 0, 3)
