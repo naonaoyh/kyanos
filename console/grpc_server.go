@@ -137,14 +137,15 @@ func (h *AgentServiceHandler) ReportEvents(stream agentpb.AgentService_ReportEve
 			// Broadcast to per-session WebSocket subscribers.
 			h.hub.BroadcastSessionEvent(evt.SessionId, rec)
 
-			// Broadcast to global "sessions" topic so SessionExplorer
-			// can update in real time.
-			if sessRec := h.store.GetSession(evt.SessionId); sessRec != nil {
-				h.hub.BroadcastSessionListChange("updated", sessRec)
-			}
+			// Create / update a live session record so the Session
+			// Explorer shows sessions in real time, before they close.
+			h.upsertLiveSession(evt, rec)
 		}
 
-		// If this is a close event with a summary, persist the session.
+		// If this is a close event with a summary, merge the full summary
+		// into the live session record (replace live-counters with final
+		// aggregated stats). The session is already in the store from the
+		// live-upsert above.
 		if closeEvt, ok := evt.Event.(*agentpb.SessionEvent_Close); ok {
 			if closeEvt.Close.Summary != nil {
 				// Determine node name from peer info or pod info.
@@ -155,11 +156,22 @@ func (h *AgentServiceHandler) ReportEvents(stream agentpb.AgentService_ReportEve
 				if nodeName == "" {
 					nodeName = h.peerNodeName(stream.Context())
 				}
-				sessionRec := SessionRecordFromSummary(closeEvt.Close.Summary, evt.TaskId, nodeName)
-				if sessionRec != nil {
-					h.store.SaveSession(sessionRec)
-					h.hub.BroadcastSessionUpdate(evt.SessionId, sessionRec)
-					h.hub.BroadcastSessionListChange("closed", sessionRec)
+				finalRec := SessionRecordFromSummary(closeEvt.Close.Summary, evt.TaskId, nodeName)
+				if finalRec != nil {
+					// Merge the close-time fields, but preserve mountpoint/username
+					// if the live record already set them (replay may fill them
+					// earlier via auth events).
+					if existing := h.store.GetSession(evt.SessionId); existing != nil {
+						if existing.Mountpoint != "" {
+							finalRec.Mountpoint = existing.Mountpoint
+						}
+						if existing.Username != "" {
+							finalRec.Username = existing.Username
+						}
+					}
+					h.store.SaveSession(finalRec)
+					h.hub.BroadcastSessionUpdate(evt.SessionId, finalRec)
+					h.hub.BroadcastSessionListChange("closed", finalRec)
 
 					// Update task session count.
 					if t := h.store.GetTask(evt.TaskId); t != nil {
@@ -405,4 +417,86 @@ func matchWildcard(pattern, value string) bool {
 		return strings.HasSuffix(value, suffix)
 	}
 	return pattern == value
+}
+
+// upsertLiveSession ensures a SessionRecord exists for every session that
+// has started sending events, so they appear in the Session Explorer in
+// real time — not only after the Close event arrives.
+//
+// On the first event for a session, a lightweight placeholder is created
+// from the event envelope. On subsequent events, live counters (GGA count,
+// RTCM frame count, CRC errors, etc.) are updated in place.
+func (h *AgentServiceHandler) upsertLiveSession(evt *agentpb.SessionEvent, rec *SessionEventRecord) {
+	existing := h.store.GetSession(evt.SessionId)
+	if existing != nil {
+		h.applyLiveEvent(existing, rec)
+		h.store.SaveSession(existing)
+		h.hub.BroadcastSessionListChange("updated", existing)
+		return
+	}
+
+	// First event — build a lightweight placeholder.
+	sr := &SessionRecord{
+		SessionID:  evt.SessionId,
+		TaskID:     evt.TaskId,
+		ClientIP:   rec.ClientIP,
+		ClientPort: rec.ClientPort,
+		NodeName:   rec.PodName,
+		StartTime:  rec.Timestamp,
+		Closed:     false,
+	}
+	h.applyLiveEvent(sr, rec)
+	h.store.SaveSession(sr)
+	h.hub.BroadcastSessionListChange("updated", sr)
+}
+
+// applyLiveEvent increments live counters on a SessionRecord from a single
+// incoming event. Close events also set the disconnect reason.
+func (h *AgentServiceHandler) applyLiveEvent(sr *SessionRecord, rec *SessionEventRecord) {
+	switch rec.EventType {
+	case "auth":
+		if d, ok := rec.EventData.(AuthEventData); ok {
+			sr.AuthMethod = d.Method
+			sr.AuthChecked = true
+			sr.AuthSuccess = d.Success
+			sr.HTTPStatusCode = d.HTTPStatus
+			sr.Mountpoint = d.Mountpoint
+			sr.Username = d.Username
+			sr.LoginLatencyMs = d.LoginLatencyMs
+		}
+	case "gga":
+		sr.GGAEvents++
+	case "rtcm":
+		sr.RTCMFrames++
+		if d, ok := rec.EventData.(RTCMEventData); ok {
+			sr.RTCMBytes += int64(d.Size)
+			if !d.CRCValid {
+				sr.RTCMCRCErrors++
+			}
+			if d.IntervalMs > 0 {
+				// Keep a rough throughput estimate: total bytes / session duration.
+				// When the interval is available, use the frame size to estimate.
+				if sr.DurationMs > 0 {
+					sr.RTCMThroughputBps = float64(sr.RTCMBytes) / (float64(sr.DurationMs) / 1000.0)
+				}
+			}
+		}
+		sr.RTCMThroughputBps = float64(sr.RTCMBytes) / (1.0 + float64(sr.DurationMs)/1000.0)
+	case "network":
+		if d, ok := rec.EventData.(NetworkEventData); ok {
+			sr.Retransmissions += d.Retransmissions
+			if d.AvgRTTUs > 0 {
+				sr.AvgRTTMs = float64(d.AvgRTTUs) / 1000.0
+			}
+			if d.P95RTTUs > 0 {
+				sr.P95RTTMs = float64(d.P95RTTUs) / 1000.0
+			}
+			sr.TCPResets += d.TCPResets
+		}
+	case "close":
+		if d, ok := rec.EventData.(CloseEventData); ok {
+			sr.DisconnectReason = d.Reason
+			sr.DisconnectDetail = d.Detail
+		}
+	}
 }

@@ -16,14 +16,14 @@ export function classifySession(session) {
   const issues = session.issues || []
   const score = session.score || 0
 
-  // Truncated: missing handshake (capture started mid-stream), or
-  // close event never captured (stopped before TCP close), or GGA
-  // data present but zero RTCM and session isn't formally closed —
-  // the data stream was cut mid-flight.
+  // Truncated: session has CLOSED but is missing the handshake
+  // (capture started mid-stream) OR has GGA but zero RTCM when closed
+  // (data stream was cut before any correction data arrived).
+  // Active (not-yet-closed) sessions are NOT truncated — they are
+  // simply still collecting data.
   const truncated =
-    !authChecked ||
-    !closed ||
-    (ggaEvents > 0 && rtcmFrames === 0 && !closed)
+    (closed && !authChecked) ||
+    (closed && ggaEvents > 0 && rtcmFrames === 0)
 
   // Problematic: auth succeeded, GGA is being uploaded, but zero RTCM
   // frames arrived — the device reconnected but never received a
