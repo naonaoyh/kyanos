@@ -806,6 +806,37 @@ npm run build  # 生产构建 → dist/
 2. **虚拟滚动**: Session 列表和 Timeline 未实现虚拟滚动（Element Plus `el-table-v2` 可后续集成）
 3. **国际化**: 当前全英文 UI，后续可加 i18n
 
+### 13.5 Web UI 增强（2026-06-18）
+
+> 本轮（commit 7e1218a → 2c26712）对 Web Console 前端进行了四项增强和一项 NTRIP 化重构。
+
+| 提交 | 内容 | 说明 |
+|------|------|------|
+| `7e1218a` | SessionDetail NTRIP 双列重设计 + reporter EffectiveClientIP 修复 | 将通用时间线替换为 NTRIP 专用布局：顶部握手带、GGA 上行左侧表（10 行）、RTCM 下行右侧表（10 行），溢出部分显示计数；修复 agent→console gRPC 管线中 `client_ip` 使用 socket IP 而非真实 IP 的问题 |
+| `8929d9f` | 会话删除 API + 前端删除动作 | 后端 `DELETE /api/v1/sessions/{id}`；前端删除按钮（确认弹窗）+ WS `session_list_deleted` 实时同步 |
+| `9c5db1a` | 任务重启按钮 + 使能/禁用开关 | Tasks.vue：停止的任务一键重启（复用相同参数）；每行 toggle 开关（stop/restart）|
+| `2c26712` | 过滤器管理（内联编辑 + 可见性） | Tasks 表格增加 Filter 列展示挂载点/用户名；运行中任务支持内联编辑过滤器（调用已有的 `POST /api/v1/tasks/{id}/filter` API），修改即时生效 |
+
+**设计决策 — 无全局设置页面**：Console 和 Agent 的所有配置均在部署时通过 Helm values 注入（Agent）或 `cmd/console.go` 的 4 个 CLI flag 指定（Console）。运行时不需要也不提供"全局设置"管理页面。此设计保持 Console 为轻量管理面，不承担配置管理 Server 的角色。COB 存储清理通过 `POST /api/v1/storage/cleanup?days=N` 手动触发 + 每小时自动轮询。Agent 参数通过创建 Task 时的 filter config 动态下发，无需集中配置存储。
+
+### 13.6 Web Console 能力矩阵 (2026-06-18)
+
+| 能力 | 状态 | 实现路径 |
+|------|------|---------|
+| 集群拓扑 | ✅ | `GET /api/v1/topology` — Agent gRPC 注册 → 节点卡片网格 (Topology.vue, 10s 轮询) |
+| 任务管理 | ✅ | 创建/停止/重启/使能开关，参数复用，WebSocket 实时状态 (Tasks.vue) |
+| 会话浏览器 | ✅ | 过滤/分页/评分标签/删除，WebSocket 实时更新 (SessionExplorer.vue) |
+| 会话详情 | ✅ | NTRIP 专用双列视图 (握手 → GGA 上行 ←→ RTCM 下行 → 诊断评分) |
+| 诊断报告 | ✅ | HTML/JSON 格式，五维度展示 (Report.vue) |
+| 告警面板 | ✅ | 异常事件聚合 + 严重程度标签 (Alerts.vue, 15s 轮询) |
+| 过滤器管理 | ✅ | 创建/内联编辑/展示/切换，每任务一套 (Tasks.vue) |
+| WebSocket 实时推送 | ✅ | `useWebSocket.js` composable，session/task 主题订阅 |
+| 会话数据导出 | ✅ | PCAP-NG + COS 自动上传 (`agent/export/`, Agent 端按需拉流) |
+| LB 多实例 | 🟡 | MemoryStore 单实例可用；多实例需 FileStore + ReadWriteMany PVC |
+| 全局设置 | ❌ 不做 | 配置通过 Helm values (Agent) + CLI flags (Console) 注入，无运行时管理 UI |
+| 虚拟滚动 | 🟡 未实现 | Session 列表和事件时间线未接入虚拟滚动（后续可加） |
+| i18n | 🟡 未实现 | 当前全英文 UI（后续可加） |
+
 ---
 
 ## 14. Phase 10: K8s 部署 🔧 配置就绪，未实地验证 (2026-06-09 → 2026-06-17)

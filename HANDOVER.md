@@ -1,13 +1,14 @@
 # Kyanos GNSS 专项开发 — 交接文档
 
-> 最后更新: 2026-06-18 (§23: Phase 10 部署交付物补全 + 上游同步 OpenSSL 3.6 / 1.6.0 + TKE 部署验证规划; 文档状态对齐)
-> 分支: `feat/gnss-ntrip-rtcm-support` (worktree: `claude/vibrant-franklin-4fbedb`)
-> 当前 HEAD: `927a52f` (工作树干净)
+> 最后更新: 2026-06-18 (§23: Phase 10 部署交付物补全 + 上游同步 OpenSSL 3.6 / 1.6.0 + TKE 部署验证规划; §24: Cloud LB 真实 IP + Web UI 增强)
+> 分支: `feat/gnss-ntrip-rtcm-support`
+> 当前 HEAD: `2c26712` (工作树干净)
 > 仓库: `https://github.com/naonaoyh/kyanos.git`
 > 上游: `https://github.com/hengyoush/kyanos` (原始 Kyanos 项目; 2026-06-17 已同步至 release 1.6.0)
 >
 > 📌 **状态速查**: Phase 1-9 ✅ 全部完成; Phase 10 (K8s 部署) 🔧 配置就绪，未实地验证。
-> 下一步阻塞在 **5.4.241 内核 eBPF 兼容性实地验证** — 详见 `docs/TKE_DEPLOYMENT_VERIFICATION_PLAN.md` (DRAFT, 待审批)。
+> Cloud LB 真实 IP (`--real-client-ip`) ✅ 实现+测试+WSL2 验证; Web Console 四项增强 ✅ (会话删除/重启/过滤器管理/NTRIP 双列详情).
+> Web UI 能力矩阵: 见 `docs/ROADMAP_NEXT.md` §13.6.
 
 ---
 
@@ -1139,3 +1140,73 @@ actual  : 0x3786  (14214, BPF PID)
 1. **审批 TKE 部署验证规划** (`docs/TKE_DEPLOYMENT_VERIFICATION_PLAN.md`)
 2. 批准后执行 **Phase A** — 创建隔离 TencentOS 3.1 CVM，在真实 5.4.241 内核冒烟 (解决最高危内核兼容性未知项)
 3. 或：先补 Phase 7 的 29 个可选 PBT 测试 / T3 遗留的 CLI 渲染通道 (`--auth-log` 等)
+
+---
+
+## 24. Cloud LB 真实 IP + Web UI 增强 + 文档更新 (2026-06-18)
+
+> §23 之后 (927a52f → 2c26712) 的进展。本轮包含一项后端特性 (real-client-IP 提取)、四项 Web Console 前端/& 后端增强、以及相关文档更新。全部已 WSL2 验证 (fresh native clone build + test 全绿)。
+
+### 24.1 Cloud LB 真实客户端 IP 提取
+
+> Commits: `c15a204` (实现), `82dd5e5` (correlator 回归测试), `7e1218a` (console reporter 修复)
+
+**动机**：TKE 集群中 NTRIP 流量经腾讯云 CLB 到达 DS Pod，eBPF 在 socket 层看到的"客户端 IP"是 CLB 内部 IP (如 `10.0.0.250`)，所有真实设备共享同一个 IP → **跨会话重连/IP 变化检测** (S4) 和**唯一客户端计数** (S6) 完全失效。
+
+**方案**：从 NTRIP 请求的 HTTP 头提取真实客户端 IP (`X-Forwarded-For` / `X-Real-IP`，CLB 默认注入)，采用双 IP 模型：
+
+| 字段 | 含义 | 用途 |
+|------|------|------|
+| `NTRIPSession.ClientIP` (保持不变) | socket 对端 IP (CLB 后 = CLB IP) | 连接生命周期匹配：`getOrCreateSession` / `OnConnectionClose` / `findSessionByClient` |
+| `NTRIPSession.RealClientIP` (新增) | LB 转发的真实客户端 IP | 语义身份：correlator 重连检测、pod_load 唯一客户端计数、report/jsonl/Web UI 展示 |
+| `EffectiveClientIP()` | RealClientIP 非空则用它，否则回退 ClientIP | 上述语义位点统一调用 |
+
+**实现文件** (11 files, +288/−22):
+- `agent/protocol/ntrip/ntrip.go` — NTRIPRequest 新增 `ForwardedFor` / `XRealIP` 字段，parseRequest 从 MIME header 提取
+- `agent/session/types.go` — `NTRIPSession.RealClientIP` + `EffectiveClientIP()` + `effectiveIP()` lock-free helper
+- `agent/session/tracker.go` — `TrackerConfig.RealClientIPHeader` + `resolveRealClientIP()` (XFF 最左 token / X-Real-IP, `net.ParseIP` 校验, 大小写不敏感); `handleNTRIPRequest` first-wins 写入
+- `agent/session/correlator.go` / `pod_load.go` / `report.go` / `jsonl.go` / `agent/session_wiring.go` — 语义位点改用 `EffectiveClientIP()`; socket IP 生命周期匹配站**不动**
+- `agent/controlplane/reporter.go` — `buildEnvelope` + `buildSessionSummary` 改用 `EffectiveClientIP()` → gRPC→Console→Web UI 链路展示真实 IP
+- `cmd/common.go` — `--real-client-ip` + `--real-client-ip-header` flags
+
+**CLI 使用**：
+```bash
+sudo kyanos watch ntrip --diag --real-client-ip --real-client-ip-header X-Forwarded-For
+```
+
+**测试** (9 个新测试，全部在 WSL2 验证通过):
+- ntrip 解析器 XFF 提取 (2 个)
+- `resolveRealClientIP` 表驱动 (5 子测试 + nil 安全)
+- `EffectiveClientIP` 回退 + `TrackerRealClientIP` 端到端 wiring
+- `CorrelatorRealClientIPCLBRegression` — **核心回归**：同 socket IP (CLB) 但不同 real IP 的两客户端 → IPChanged=true（修复前为 false）
+- `CorrelatorSocketOnlyCannotDistinguishCLBClients` — 不开 real-IP 时同 CLB IP 无法区分 (锚定修复价值)
+
+**已知限制**：Proxy Protocol (TCP级) 未实现 (需 conn 流水线 stream 预处理器)；可信代理 CIDR 校验未实现 (内部诊断工具场景按需开启)。
+
+### 24.2 Web Console 前端增强 (4 项)
+
+> Commits: `7e1218a`, `8929d9f`, `9c5db1a`, `2c26712`
+
+| 增强 | 文件 | 说明 |
+|------|------|------|
+| **SessionDetail NTRIP 双列重设计** | `console/frontend/src/views/SessionDetail.vue` | 将通用 EventTimeline 替换为 NTRIP 专用布局：身份卡片 → 握手带 → GGA 上行左侧表 (10行: 时间/fix/sats/HDOP/经纬度) ←→ RTCM 下行右侧表 (10行: 时间/msg/size/CRC/间隔)，溢出显示计数，统计行 (GGA 总数/RTCM 总数/平均 RTT/重传数)，断连原因横幅 |
+| **会话删除** | `console/api.go` + `console/frontend/src/views/SessionExplorer.vue` | 后端 `DELETE /api/v1/sessions/{id}`，前端每行删除图标按钮 (确认弹窗)，WS `session_list_deleted` 实时移除 |
+| **任务重启 + 使能/禁用开关** | `console/frontend/src/views/Tasks.vue` | 停止/完成/失败的任务一键重启 (▶ 按钮，复用相同参数 re-create)；每行 toggle 开关 (enable=restart 已停任务，disable=stop 运行中任务) |
+| **过滤器管理** | `console/frontend/src/views/Tasks.vue` + `console/frontend/src/api/index.js` | Tasks 表格增加 Filter 列展示 mountpoints(🏔️) / usernames(👤)；运行中任务支持内联编辑过滤器 (Edit 按钮 → 弹框 → 调用已有 `POST /api/v1/tasks/{id}/filter` API)，即时生效 |
+
+**Web Console 能力矩阵** — 详见 `docs/ROADMAP_NEXT.md` §13.6。
+
+### 24.3 设计决策：无全局设置页面
+
+Console 和 Agent 的所有配置均在部署时通过以下方式注入，**运行时不需要也不提供"全局设置"管理页面**：
+- **Agent**: Helm values → DaemonSet args (`--grpc-server`, `--real-client-ip`, `--gga-interval-warn`, `--cos-bucket`, etc.)
+- **Console**: `cmd/console.go` 的 4 个 CLI flag (`--grpc-addr`, `--http-addr`, `--storage-dir`, `--storage-retention`)
+- **抓包过滤**: Task 创建时设置 mountpoints/usernames/message_types，运行时通过 `POST /api/v1/tasks/{id}/filter` 更新
+
+此设计保持 Console 为轻量管理面，不承担配置管理 Server 的角色。
+
+### 24.4 文档更新
+
+- `HANDOVER.md` — 本 §24 + 页眉 HEAD/状态更新
+- `docs/ROADMAP_NEXT.md` — §13.5 (Web UI 增强) + §13.6 (Web Console 能力矩阵)
+- `docs/TKE_DEPLOYMENT_VERIFICATION_PLAN.md` — 无改动 (DRAFT 待审批)
