@@ -678,6 +678,11 @@ func (c *Connection4) parseStreamBuffer(streamBuffer *buffer.StreamBuffer, messa
 	// var parseState protocol.ParseState
 	for !stop && !streamBuffer.IsEmpty() {
 		parseResult := parser.ParseStream(streamBuffer, messageType)
+		if common.ConntrackLog.Level >= logrus.DebugLevel {
+			common.ConntrackLog.Debugf("[parseStreamBuffer] %s(%s) result: state=%d readBytes=%d msgs=%d headLen=%d seq=%d",
+				c.ToString(), messageType.String(), parseResult.ParseState, parseResult.ReadBytes, len(parseResult.ParsedMessages),
+				streamBuffer.Head().Len(), streamBuffer.Position0())
+		}
 		// parseState = parseResult.ParseState
 		switch parseResult.ParseState {
 		case protocol.Success:
