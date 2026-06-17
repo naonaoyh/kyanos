@@ -468,11 +468,13 @@ func SetupAgent(options ac.AgentOptions) {
 
 		// -- EventReporter: register on the SessionTracker if it exists --
 		reporter := controlplane.NewEventReporter(controlplane.EventReporterConfig{
-			Tasks:    taskMgr,
-			Resolver: podResolver,
-			Redactor: &controlplane.Redactor{},
-			Out:      eventBuffer.Push,
-			Silent:   false,
+			Tasks:            taskMgr,
+			Resolver:         podResolver,
+			Redactor:         &controlplane.Redactor{},
+			Out:              eventBuffer.Push,
+			Silent:           false,
+			GGAWarnInterval:  options.SessionTrackerConfig.GGAWarnInterval,
+			RTCMWarnInterval: options.SessionTrackerConfig.RTCMWarnInterval,
 		})
 		if sessionTracker != nil {
 			sessionTracker.AddEventListener(reporter)

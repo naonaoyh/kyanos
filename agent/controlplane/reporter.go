@@ -31,6 +31,11 @@ type EventReporter struct {
 	redactor *Redactor
 	out      func(*agentpb.SessionEvent) // typically EventBuffer.Push
 	silent   bool                        // Req 4.10: silent-block configuration
+
+	// Diagnostic thresholds — passed through to session.Score() for
+	// populating the proto SessionSummary score/issue fields.
+	ggaWarnInterval  time.Duration
+	rtcmWarnInterval time.Duration
 }
 
 // EventReporterConfig holds construction parameters for an EventReporter.
@@ -40,17 +45,22 @@ type EventReporterConfig struct {
 	Redactor *Redactor
 	Out      func(*agentpb.SessionEvent)
 	Silent   bool
+
+	GGAWarnInterval  time.Duration
+	RTCMWarnInterval time.Duration
 }
 
 // NewEventReporter constructs an EventReporter. All fields in cfg should be
 // non-nil except Resolver (which is nil when Pod resolution is disabled).
 func NewEventReporter(cfg EventReporterConfig) *EventReporter {
 	return &EventReporter{
-		tasks:    cfg.Tasks,
-		resolver: cfg.Resolver,
-		redactor: cfg.Redactor,
-		out:      cfg.Out,
-		silent:   cfg.Silent,
+		tasks:            cfg.Tasks,
+		resolver:         cfg.Resolver,
+		redactor:         cfg.Redactor,
+		out:              cfg.Out,
+		silent:           cfg.Silent,
+		ggaWarnInterval:  cfg.GGAWarnInterval,
+		rtcmWarnInterval: cfg.RTCMWarnInterval,
 	}
 }
 
@@ -178,7 +188,7 @@ func (r *EventReporter) projectCloseEvent(s *session.NTRIPSession) *agentpb.Sess
 	closeEv := &agentpb.SessionCloseEvent{
 		DisconnectReason: s.DisconnectReason.String(),
 		DisconnectDetail: s.DisconnectDetail,
-		Summary:          buildSessionSummary(s),
+		Summary:          r.buildSessionSummary(s),
 	}
 
 	ev := r.buildEnvelope(s)
@@ -241,7 +251,7 @@ func (r *EventReporter) lookupPodForSession(_ *session.NTRIPSession) *agentpb.Po
 //
 // NOTE: This function NEVER reads s.Password — structural omission of the
 // credential. The SessionSummary proto intentionally carries no credential field.
-func buildSessionSummary(s *session.NTRIPSession) *agentpb.SessionSummary {
+func (r *EventReporter) buildSessionSummary(s *session.NTRIPSession) *agentpb.SessionSummary {
 	var closeTimeNs int64
 	var durationMs int64
 	if s.ConnCloseTime != nil {
@@ -255,7 +265,11 @@ func buildSessionSummary(s *session.NTRIPSession) *agentpb.SessionSummary {
 		rtcmMsgTypes[strconv.Itoa(k)] = int32(v)
 	}
 
-	return &agentpb.SessionSummary{
+	// Diagnostic scores and issues (previously unpopulated — proto fields 80-90 exist).
+	score := s.Score(r.ggaWarnInterval, r.rtcmWarnInterval)
+	gga := s.ComputeGGASummary()
+
+	summary := &agentpb.SessionSummary{
 		SessionId:    s.SessionID,
 		Mountpoint:   s.MountPoint,
 		Username:     s.Username,
@@ -274,8 +288,10 @@ func buildSessionSummary(s *session.NTRIPSession) *agentpb.SessionSummary {
 		HttpStatusCode: int32(s.HTTPStatusCode),
 		LoginLatencyMs: s.LoginLatency.Milliseconds(),
 		// GGA (S2)
-		GgaEvents:      int32(len(s.GGAEvents)),
-		GgaFrequencyHz: s.GGAFrequency,
+		GgaEvents:        int32(len(s.GGAEvents)),
+		GgaFixRate:       gga.FixRate,
+		GgaAvgSatellites: gga.AvgSatellites,
+		GgaFrequencyHz:   s.GGAFrequency,
 		// RTCM (S3)
 		RtcmFrames:        int32(s.RTCMStats.TotalFrames),
 		RtcmBytes:         s.RTCMStats.TotalBytes,
@@ -289,7 +305,38 @@ func buildSessionSummary(s *session.NTRIPSession) *agentpb.SessionSummary {
 		// Network (S5)
 		Retransmissions:    int32(s.NetworkQuality.TotalRetransmissions),
 		RetransmissionRate: s.NetworkQuality.RetransmissionRate,
+		AvgRttMs:           durationToMs(s.NetworkQuality.AvgRTT),
+		P95RttMs:           durationToMs(s.NetworkQuality.P95RTT),
+		RttJitterMs:        durationToMs(s.NetworkQuality.RTTJitter),
+		TcpResets:          int32(len(s.NetworkQuality.TCPResetEvents)),
+		// Disconnect (S4)
+		DisconnectReason: s.DisconnectReason.String(),
+		DisconnectDetail: s.DisconnectDetail,
+		// Diagnostic scores (proto fields 80-85)
+		Score:          int32(score.Total),
+		LoginScore:     int32(score.LoginScore),
+		GgaScore:       int32(score.GGAScore),
+		RtcmScore:      int32(score.RTCMScore),
+		NetworkScore:   int32(score.NetworkScore),
+		StabilityScore: int32(score.StabilityScore),
 	}
+
+	if len(score.Issues) > 0 {
+		summary.Issues = make([]*agentpb.SessionIssue, len(score.Issues))
+		for i, iss := range score.Issues {
+			summary.Issues[i] = &agentpb.SessionIssue{
+				Category:    iss.Category,
+				Severity:    iss.Severity,
+				Description: iss.Description,
+			}
+		}
+	}
+
+	return summary
+}
+
+func durationToMs(d time.Duration) float64 {
+	return float64(d) / float64(time.Millisecond)
 }
 
 // ---------------------------------------------------------------------------

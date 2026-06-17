@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getSession, getSessionEvents } from '../api'
+import { classifySession } from '../utils/sessionFlags'
 
 const route = useRoute()
 const router = useRouter()
@@ -10,6 +11,27 @@ const events = ref([])
 const loading = ref(false)
 const wsConnected = ref(false)
 const liveDuration = ref(0)
+
+// Truncation notice and identity card color
+const flags = computed(() => session.value ? classifySession(session.value) : {})
+
+const truncationNotice = computed(() => {
+  if (!session.value) return null
+  const hasHandshake = events.value.some(e => e.event_type === 'auth')
+  const isClosed = session.value.closed
+  if (!hasHandshake && !isClosed) return { severity: 'warning', text: 'Handshake not captured and session is still active — data may be incomplete.' }
+  if (!hasHandshake) return { severity: 'info', text: 'Handshake data not captured (capture started mid-stream).' }
+  if (!isClosed) return { severity: 'info', text: 'Session still active — close event not yet captured. GGA/RTCM counters may be partial.' }
+  return null
+})
+
+const identityBorderColor = computed(() => {
+  const f = flags.value
+  if (f.problematic) return 'hsl(350, 75%, 53%)'
+  if (f.truncated)   return 'hsl(30, 80%, 55%)'
+  if (f.anomalous)   return 'hsl(40, 90%, 45%)'
+  return 'transparent'
+})
 
 let socket = null
 let durationTimer = null
@@ -161,8 +183,18 @@ onUnmounted(() => { closeWebSocket(); if (durationTimer) { clearInterval(duratio
     </div>
 
     <template v-if="session">
+      <!-- ── Truncation banner ── -->
+      <el-alert
+        v-if="truncationNotice"
+        :type="truncationNotice.severity"
+        :title="truncationNotice.text"
+        show-icon
+        :closable="false"
+        class="truncation-banner"
+      />
+
       <!-- ── Session identity card ── -->
-      <el-card class="identity-card">
+      <el-card class="identity-card" :style="{ borderLeft: '4px solid ' + identityBorderColor }">
         <div class="identity-row">
           <div class="identity-main">
             <h2>{{ session.username || 'anonymous' }}@{{ session.mountpoint }}</h2>
@@ -304,7 +336,8 @@ onUnmounted(() => { closeWebSocket(); if (durationTimer) { clearInterval(duratio
 .top-right { display: flex; align-items: center; gap: 8px; }
 
 /* ── Identity ── */
-.identity-card { margin-bottom: 10px; }
+.identity-card { margin-bottom: 10px; transition: border-left-color 0.5s ease; }
+.truncation-banner { margin-bottom: 10px; transition: opacity 0.4s ease; }
 .identity-row { display: flex; flex-direction: column; gap: 8px; }
 .identity-main { display: flex; align-items: center; gap: 12px; }
 .identity-main h2 { margin: 0; font-size: 20px; }
