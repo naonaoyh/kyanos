@@ -452,7 +452,13 @@ func (h *AgentServiceHandler) upsertLiveSession(evt *agentpb.SessionEvent, rec *
 
 // applyLiveEvent increments live counters on a SessionRecord from a single
 // incoming event. Close events also set the disconnect reason.
+// DurationMs is updated on every event so the UI shows real-time session length.
 func (h *AgentServiceHandler) applyLiveEvent(sr *SessionRecord, rec *SessionEventRecord) {
+	// Update live duration on every event (used by throughput calculation and UI).
+	if !sr.StartTime.IsZero() {
+		sr.DurationMs = rec.Timestamp.Sub(sr.StartTime).Milliseconds()
+	}
+
 	switch rec.EventType {
 	case "auth":
 		if d, ok := rec.EventData.(AuthEventData); ok {
@@ -473,15 +479,10 @@ func (h *AgentServiceHandler) applyLiveEvent(sr *SessionRecord, rec *SessionEven
 			if !d.CRCValid {
 				sr.RTCMCRCErrors++
 			}
-			if d.IntervalMs > 0 {
-				// Keep a rough throughput estimate: total bytes / session duration.
-				// When the interval is available, use the frame size to estimate.
-				if sr.DurationMs > 0 {
-					sr.RTCMThroughputBps = float64(sr.RTCMBytes) / (float64(sr.DurationMs) / 1000.0)
-				}
-			}
 		}
-		sr.RTCMThroughputBps = float64(sr.RTCMBytes) / (1.0 + float64(sr.DurationMs)/1000.0)
+		if sr.DurationMs > 0 {
+			sr.RTCMThroughputBps = float64(sr.RTCMBytes) / (float64(sr.DurationMs) / 1000.0)
+		}
 	case "network":
 		if d, ok := rec.EventData.(NetworkEventData); ok {
 			sr.Retransmissions += d.Retransmissions
