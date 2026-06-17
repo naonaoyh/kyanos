@@ -705,7 +705,18 @@ func (c *Connection4) parseStreamBuffer(streamBuffer *buffer.StreamBuffer, messa
 					c.resetParseProgress()
 				}
 			} else {
-				if len(parseResult.ParsedMessages) > 0 && parseResult.ParsedMessages[0].IsReq() != (messageType == protocol.Request) {
+				// Direction-mismatch discard: skip parsed messages whose IsReq()
+				// doesn't match the stream side (e.g. an HTTP response parsed from
+				// the request buffer). This prevents stale data from contaminating
+				// the wrong queue.
+				//
+				// NTRIP exception: RTCM frames are unidirectional push "requests"
+				// (IsReq()==true) that legitimately live on the response stream.
+				// The NTRIP parser already handles direction via separate
+				// request/response stream modes, so the discard gate must not
+				// filter them out.
+				ntripBypass := c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP
+				if !ntripBypass && len(parseResult.ParsedMessages) > 0 && parseResult.ParsedMessages[0].IsReq() != (messageType == protocol.Request) {
 					streamBuffer.RemovePrefix(parseResult.ReadBytes)
 				} else {
 					for _, parsedMessage := range parseResult.ParsedMessages {
