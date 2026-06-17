@@ -143,7 +143,9 @@ func initSizeFilter(cmd *cobra.Command) protocol.SizeFilter {
 // agent behaves exactly like upstream kyanos.
 func initSessionDiagnosis(cmd *cobra.Command) {
 	diag, _ := cmd.Flags().GetBool("diag")
-	if !diag {
+	// --webui also implies diagnostics (Console needs the session tracker).
+	webui, _ := cmd.Flags().GetBool("webui")
+	if !diag && !webui {
 		return
 	}
 
@@ -238,6 +240,14 @@ func applyWebUIOptions(cmd *cobra.Command) {
 	}
 	if v, err := cmd.Flags().GetBool("webui"); err == nil && v {
 		options.WebUIEnable = true
+		// --webui implies session diagnosis: the embedded Console needs
+		// the session tracker to produce real-time events and session
+		// summaries. If --diag was not explicitly passed, enable it
+		// with default thresholds.
+		if !options.SessionDiagnosisEnable {
+			options.SessionDiagnosisEnable = true
+			options.SessionTrackerConfig = session.DefaultTrackerConfig()
+		}
 	}
 	if v, err := cmd.Flags().GetString("webui-addr"); err == nil && v != "" {
 		options.WebUIHTTPAddr = v
