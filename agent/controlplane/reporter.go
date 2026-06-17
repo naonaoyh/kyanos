@@ -198,7 +198,7 @@ func (r *EventReporter) buildEnvelope(s *session.NTRIPSession) *agentpb.SessionE
 		SessionId:   s.SessionID,
 		TimestampNs: time.Now().UnixNano(),
 		ObservedClient: &agentpb.ClientAddr{
-			Ip:   s.ClientIP,
+			Ip:   s.EffectiveClientIP(),
 			Port: uint32(s.ClientPort),
 		},
 	}
@@ -260,7 +260,7 @@ func buildSessionSummary(s *session.NTRIPSession) *agentpb.SessionSummary {
 		Mountpoint:   s.MountPoint,
 		Username:     s.Username,
 		NtripVersion: s.NTRIPVersion,
-		ClientIp:     s.ClientIP,
+		ClientIp:     s.EffectiveClientIP(),
 		ClientPort:   uint32(s.ClientPort),
 		ServerPod:    s.ServerPod,
 		ServerIp:     s.ServerIP,
