@@ -873,6 +873,26 @@ func (p *NTRIPStreamParser) parseRTCMFrame(
 	}
 
 	result := p.rtcmParser.ParseStream(streamBuffer, messageType)
+
+	// When the RTCM parser returns Invalid but the buffer starts with a valid
+	// RTCM preamble (0xD3 + reserved bits=0), the CRC likely failed on a
+	// partial/truncated frame.  Advance past 1 byte and search for the next
+	// valid RTCM frame so the outer parse loop doesn't re-find the same
+	// invalid preamble and spin.
+	if result.ParseState == protocol.Invalid &&
+		len(buf) > 2 && buf[0] == rtcm.RTCMPreamble && (buf[1]&0xFC) == 0x00 {
+		for i := 1; i < len(buf)-2; i++ {
+			if buf[i] == rtcm.RTCMPreamble && (buf[i+1]&0xFC) == 0x00 {
+				return protocol.ParseResult{
+					ParseState: protocol.Invalid,
+					ReadBytes:  i,
+				}
+			}
+		}
+		// No next frame found — return original result (NeedsMoreData or Invalid)
+		return result
+	}
+
 	if result.ParseState != protocol.Success {
 		return result
 	}
