@@ -509,6 +509,7 @@ func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernE
 			isReq = true
 		} else if data[0] == 0xD3 && len(data) >= 3 && (data[1]&0xFC) == 0x00 {
 			isReq = false
+			common.ConntrackLog.Infof("[RTCM-DEBUG] %s RTCM data detected, len=%d, isReq=false → respBuffer", c.ToString(), len(data))
 		} else {
 			isRequestPrefix := false
 			for _, prefix := range []string{"GET ", "POST ", "SOURCE "} {
@@ -662,6 +663,15 @@ func (c *Connection4) parseStreamBuffer(streamBuffer *buffer.StreamBuffer, messa
 		// TODO
 		startPos = 0
 	}
+	isRTCMDebug := c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && messageType == protocol.Response
+	if isRTCMDebug && streamBuffer.Head() != nil {
+		head := streamBuffer.Head().Buffer()
+		first3 := make([]byte, 0, 3)
+		for i := 0; i < len(head) && i < 3; i++ {
+			first3 = append(first3, head[i])
+		}
+		common.ConntrackLog.Infof("[RTCM-DEBUG] %s resp startPos=%d headLen=%d first3=%v", c.ToString(), startPos, len(head), first3)
+	}
 	if startPos > 0 {
 		if common.ConntrackLog.Level >= logrus.DebugLevel {
 			common.ConntrackLog.Debugf("[parseStreamBuffer] %s Removed streambuffer some head data(%d bytes) due to find boundary from %s queue", c.ToString(), startPos, messageType.String())
@@ -672,6 +682,12 @@ func (c *Connection4) parseStreamBuffer(streamBuffer *buffer.StreamBuffer, messa
 	// var parseState protocol.ParseState
 	for !stop && !streamBuffer.IsEmpty() {
 		parseResult := parser.ParseStream(streamBuffer, messageType)
+		if isRTCMDebug {
+			common.ConntrackLog.Infof("[RTCM-DEBUG] %s ParseStream state=%d readBytes=%d msgs=%d", c.ToString(), parseResult.ParseState, parseResult.ReadBytes, len(parseResult.ParsedMessages))
+			for mi, m := range parseResult.ParsedMessages {
+				common.ConntrackLog.Infof("[RTCM-DEBUG]   msg[%d] type=%T isReq=%v", mi, m, m.IsReq())
+			}
+		}
 		// parseState = parseResult.ParseState
 		switch parseResult.ParseState {
 		case protocol.Success:
