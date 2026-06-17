@@ -11,6 +11,7 @@ export const createTask = (data) => api.post('/tasks', data)
 export const listTasks = () => api.get('/tasks')
 export const getTask = (id) => api.get(`/tasks/${id}`)
 export const stopTask = (id) => api.delete(`/tasks/${id}`)
+export const updateTaskFilter = (id, data) => api.post(`/tasks/${id}/filter`, data)
 
 // --- Sessions ---
 

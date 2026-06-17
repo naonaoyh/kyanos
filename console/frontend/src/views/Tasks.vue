@@ -1,11 +1,14 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import { listTasks, createTask, stopTask } from '../api'
+import { listTasks, createTask, stopTask, updateTaskFilter } from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const tasks = ref([])
 const loading = ref(false)
 const showCreate = ref(false)
+const showFilter = ref(false)
+const editingTask = ref(null)
+const filterForm = ref({ mountpoints: '', usernames: '' })
 
 const form = ref({
   target_pod: '',
@@ -98,6 +101,39 @@ const handleToggle = async (task) => {
   }
 }
 
+// ---- Filter management ----
+
+const openFilterEditor = (task) => {
+  editingTask.value = task
+  const m = (task.ntrip_filter && task.ntrip_filter.mountpoints) || []
+  const u = (task.ntrip_filter && task.ntrip_filter.usernames) || []
+  filterForm.value = { mountpoints: m.join(', '), usernames: u.join(', ') }
+  showFilter.value = true
+}
+
+const handleFilterUpdate = async () => {
+  if (!editingTask.value) return
+  const id = editingTask.value.id
+  const mountpoints = filterForm.value.mountpoints
+    ? filterForm.value.mountpoints.split(',').map(s => s.trim()).filter(Boolean)
+    : []
+  const usernames = filterForm.value.usernames
+    ? filterForm.value.usernames.split(',').map(s => s.trim()).filter(Boolean)
+    : []
+  try {
+    await updateTaskFilter(id, { mountpoints, usernames })
+    // Update local task model so the table reflects the change immediately.
+    const idx = tasks.value.findIndex(t => t.id === id)
+    if (idx !== -1) {
+      tasks.value[idx].ntrip_filter = { mountpoints, usernames }
+    }
+    ElMessage.success(`Filter updated for task ${id}`)
+    showFilter.value = false
+  } catch (e) {
+    ElMessage.error('Failed to update filter: ' + (e.response?.data?.error || e.message))
+  }
+}
+
 // ---- WebSocket (unchanged) ----
 const sockets = {}
 
@@ -152,33 +188,47 @@ onUnmounted(closeAllTaskWS)
 
     <el-table :data="tasks" v-loading="loading" stripe>
       <el-table-column prop="id" label="Task ID" min-width="180" />
-      <el-table-column prop="target_pod" label="Target Pod" width="160" />
-      <el-table-column prop="target_namespace" label="Namespace" width="140" />
-      <el-table-column prop="node_name" label="Node" width="120" />
-      <el-table-column prop="status" label="Status" width="110">
+      <el-table-column prop="target_pod" label="Pod" width="140" />
+      <el-table-column label="Filter" min-width="180">
+        <template #default="{ row }">
+          <span v-if="row.ntrip_filter && (row.ntrip_filter.mountpoints?.length || row.ntrip_filter.usernames?.length)" class="filter-summary">
+            <template v-if="row.ntrip_filter.mountpoints?.length">
+              🏔️ {{ row.ntrip_filter.mountpoints.join(', ') }}
+            </template>
+            <template v-if="row.ntrip_filter.mountpoints?.length && row.ntrip_filter.usernames?.length"> &middot; </template>
+            <template v-if="row.ntrip_filter.usernames?.length">
+              👤 {{ row.ntrip_filter.usernames.join(', ') }}
+            </template>
+          </span>
+          <span v-else class="no-filter">(all traffic)</span>
+        </template>
+      </el-table-column>
+      <el-table-column prop="status" label="Status" width="100">
         <template #default="{ row }">
           <el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="session_count" label="Sessions" width="90" align="center" />
-      <el-table-column prop="duration_seconds" label="Duration" width="100" align="center">
+      <el-table-column prop="duration_seconds" label="Duration" width="90" align="center">
         <template #default="{ row }">
           {{ row.duration_seconds ? (row.duration_seconds / 60).toFixed(0) + 'm' : '-' }}
         </template>
       </el-table-column>
-      <el-table-column label="Actions" width="180" align="center">
+      <el-table-column label="Actions" width="200" align="center">
         <template #default="{ row }">
           <div class="action-btns">
-            <!-- Running tasks: show Stop + toggle off -->
             <template v-if="row.status === 'running'">
+              <el-tooltip content="Edit filter" placement="top">
+                <el-button size="small" circle @click.stop="openFilterEditor(row)">
+                  <el-icon><Edit /></el-icon>
+                </el-button>
+              </el-tooltip>
               <el-tooltip content="Stop capture" placement="top">
                 <el-button size="small" type="danger" circle @click.stop="handleStop(row.id)">
                   <el-icon><VideoPause /></el-icon>
                 </el-button>
               </el-tooltip>
             </template>
-
-            <!-- Stopped / completed / failed: show Restart + toggle on -->
             <template v-else>
               <el-tooltip content="Restart with same parameters" placement="top">
                 <el-button size="small" type="primary" circle @click.stop="handleRestart(row)">
@@ -186,8 +236,6 @@ onUnmounted(closeAllTaskWS)
                 </el-button>
               </el-tooltip>
             </template>
-
-            <!-- Toggle switch: enable = restart stopped, disable = stop running -->
             <el-tooltip :content="row.status === 'running' ? 'Disable' : 'Enable'" placement="top">
               <el-switch
                 :model-value="row.status === 'running'"
@@ -201,6 +249,7 @@ onUnmounted(closeAllTaskWS)
       </el-table-column>
     </el-table>
 
+    <!-- Create dialog -->
     <el-dialog v-model="showCreate" title="Create Capture Task" width="520px">
       <el-form :model="form" label-width="130px">
         <el-form-item label="Target Pod">
@@ -230,6 +279,25 @@ onUnmounted(closeAllTaskWS)
         <el-button type="primary" @click="handleCreate">Create</el-button>
       </template>
     </el-dialog>
+
+    <!-- Filter editor dialog -->
+    <el-dialog v-model="showFilter" title="Edit Filter" width="460px">
+      <template v-if="editingTask">
+        <p class="filter-task-id">Task <code>{{ editingTask.id }}</code></p>
+      </template>
+      <el-form :model="filterForm" label-width="130px">
+        <el-form-item label="Mountpoints">
+          <el-input v-model="filterForm.mountpoints" placeholder="MOUNT-A, MOUNT-B (comma-separated)" />
+        </el-form-item>
+        <el-form-item label="Usernames">
+          <el-input v-model="filterForm.usernames" placeholder="user001 (comma-separated)" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showFilter = false">Cancel</el-button>
+        <el-button type="primary" @click="handleFilterUpdate">Save</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -246,6 +314,10 @@ h2 { margin: 0; }
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
 }
+.filter-summary { font-size: 12px; color: #606266; }
+.no-filter { font-size: 12px; color: #c0c4cc; }
+.filter-task-id { margin-bottom: 12px; font-size: 13px; }
+.filter-task-id code { background: #f5f7fa; padding: 2px 6px; border-radius: 3px; }
 </style>
