@@ -332,27 +332,23 @@ func (p *NTRIPStreamParser) FindBoundary(
 	}
 	buf := head.Buffer()
 
-	switch p.mode {
-	case modeRequestSide:
-		return p.findRequestBoundary(buf, startPos)
-	case modeResponseSide:
-		return p.findResponseBoundary(buf, startPos)
-	default:
-		// Auto-detect: try requests first, then responses, then RTCM
-		if pos := p.findRequestBoundary(buf, startPos); pos >= 0 {
-			return pos
-		}
-		if pos := p.findResponseBoundary(buf, startPos); pos >= 0 {
-			return pos
-		}
-		// Last resort: RTCM frame preamble
-		for i := startPos; i < len(buf)-2; i++ {
-			if buf[i] == 0xD3 && (buf[i+1]&0xFC) == 0x00 {
-				return i
-			}
-		}
-		return -1
+	// Try all boundary types regardless of mode. NTRIP streams mix request
+	// data (GGA) and response data (RTCM, ICY) in the same direction, and a
+	// single parser instance is shared across both stream buffers. The mode
+	// may lag behind the actual data, so we always scan for all boundary types.
+	if pos := p.findRequestBoundary(buf, startPos); pos >= 0 {
+		return pos
 	}
+	if pos := p.findResponseBoundary(buf, startPos); pos >= 0 {
+		return pos
+	}
+	// Last resort: raw RTCM frame preamble
+	for i := startPos; i < len(buf)-2; i++ {
+		if buf[i] == 0xD3 && (buf[i+1]&0xFC) == 0x00 {
+			return i
+		}
+	}
+	return -1
 }
 
 func (p *NTRIPStreamParser) findRequestBoundary(buf []byte, startPos int) int {

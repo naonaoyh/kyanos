@@ -466,6 +466,35 @@ func extractHeaderEvent(data []byte, ke *bpf.AgentKernEvt, c *Connection4) *bpf.
 }
 
 func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernEvt) bool {
+	// NTRIP detection: runs regardless of httpFinalized. NTRIP v1 uses ICY
+	// responses and non-standard methods that the HTTP finalization guard
+	// would otherwise suppress. We check for NTRIP-specific markers first
+	// so the protocol can be upgraded from HTTP to NTRIP at any point.
+	if len(data) > 0 && c.Protocol != bpf.AgentTrafficProtocolTKProtocolNTRIP {
+		isNTRIP := false
+		if data[0] == '$' {
+			s := string(data)
+			if strings.Contains(s, "GGA") || strings.Contains(s, "GNS") {
+				isNTRIP = true
+			}
+		} else if data[0] == 0xD3 && len(data) >= 3 && (data[1]&0xFC) == 0x00 {
+			payloadLen := (uint16(data[1])&0x03)<<8 | uint16(data[2])
+			if payloadLen < 1024 {
+				isNTRIP = true
+			}
+		} else {
+			for _, prefix := range []string{"ICY ", "SOURCETABLE ", "SOURCE ", "Ntrip-Version: "} {
+				if len(data) >= len(prefix) && string(data[:len(prefix)]) == prefix {
+					isNTRIP = true
+					break
+				}
+			}
+		}
+		if isNTRIP {
+			c.Protocol = bpf.AgentTrafficProtocolTKProtocolNTRIP
+		}
+	}
+
 	if (c.Protocol == bpf.AgentTrafficProtocolTKProtocolHTTP || c.Protocol == bpf.AgentTrafficProtocolTKProtocolUnset || c.Protocol == bpf.AgentTrafficProtocolTKProtocolUnknown) && !c.httpFinalized && len(data) > 0 {
 		hasFinalizedPrefix := false
 		for _, prefix := range []string{"POST ", "PUT ", "OPTIONS ", "DELETE ", "PATCH ", "HEAD "} {
@@ -476,29 +505,6 @@ func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernE
 		}
 		if hasFinalizedPrefix {
 			c.httpFinalized = true
-		} else {
-			isNTRIP := false
-			if data[0] == '$' {
-				s := string(data)
-				if strings.Contains(s, "GGA") || strings.Contains(s, "GNS") {
-					isNTRIP = true
-				}
-			} else if data[0] == 0xD3 && len(data) >= 3 && (data[1]&0xFC) == 0x00 {
-				payloadLen := (uint16(data[1])&0x03)<<8 | uint16(data[2])
-				if payloadLen < 1024 {
-					isNTRIP = true
-				}
-			} else {
-				for _, prefix := range []string{"ICY ", "SOURCETABLE ", "SOURCE ", "Ntrip-Version: "} {
-					if len(data) >= len(prefix) && string(data[:len(prefix)]) == prefix {
-						isNTRIP = true
-						break
-					}
-				}
-			}
-			if isNTRIP {
-				c.Protocol = bpf.AgentTrafficProtocolTKProtocolNTRIP
-			}
 		}
 	}
 
