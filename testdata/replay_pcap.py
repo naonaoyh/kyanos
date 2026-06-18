@@ -348,12 +348,14 @@ def main():
             c_sock = client_mapping[client_key]
             s_sock = server_client_mapping[client_key]
 
-            # Direction swap: RTCM downlinked by Server, GGA uplinked by Client
+            # Direction: client-originating data goes through client socket,
+            # server-originating data goes through server socket.
             try:
                 t0_send = time.time()
                 if is_client_sending:
-                    s_sock.sendall(payload)
+                    c_sock.sendall(payload)
                 else:
+                    s_sock.sendall(payload)
                     c_sock.sendall(payload)
                 send_duration_ms = (time.time() - t0_send) * 1000.0
                 if send_duration_ms > 50.0:

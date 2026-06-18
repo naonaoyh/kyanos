@@ -514,6 +514,10 @@ func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernE
 		if common.ConntrackLog.Level >= logrus.DebugLevel {
 			common.ConntrackLog.Debugf("[NTRIP-DIR] %s origIsReq=%v data[0]=%02x len=%d", c.ToString(), isReq, data[0], len(data))
 		}
+		// Content-based direction override for NTRIP.
+		// GGA ($-prefixed) is always client→server (request).
+		// RTCM (0xD3 preamble) is always server→client (response).
+		// HTTP prefixes follow standard HTTP direction.
 		if data[0] == '$' {
 			isReq = true
 		} else if data[0] == 0xD3 && len(data) >= 3 && (data[1]&0xFC) == 0x00 {
