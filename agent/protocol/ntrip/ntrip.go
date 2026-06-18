@@ -997,6 +997,10 @@ func (p *NTRIPStreamParser) parseNMEA(
 
 // Match pairs NTRIP handshake messages into Records and emits RTCM/NMEA
 // frames as independent records.
+//
+// Unpaired NTRIPRequest messages are kept in ReqQueue so that a later
+// NTRIPResponse can still find and pair with them.  Non-request messages
+// (NMEA, RTCM, standalone responses) are always consumed immediately.
 func (p *NTRIPStreamParser) Match(
 	reqStreams map[protocol.StreamId]*protocol.ParsedMessageQueue,
 	respStreams map[protocol.StreamId]*protocol.ParsedMessageQueue,
@@ -1013,15 +1017,24 @@ func (p *NTRIPStreamParser) Match(
 		respMsgs = *q
 	}
 
+	// --- Phase 1: pair handshake (NTRIPRequest ↔ NTRIPResponse) ---
 	reqIdx := 0
 	respIdx := 0
 
-	// Pair handshake messages: NTRIPRequest ↔ NTRIPResponse
-	for reqIdx < len(reqMsgs) && respIdx < len(respMsgs) {
+	for reqIdx < len(reqMsgs) {
 		req, isReq := reqMsgs[reqIdx].(*NTRIPRequest)
-		resp, isResp := respMsgs[respIdx].(*NTRIPResponse)
-
-		if isReq && isResp {
+		if !isReq {
+			reqIdx++
+			continue
+		}
+		// Find the next response to pair with this request.
+		for respIdx < len(respMsgs) {
+			resp, isResp := respMsgs[respIdx].(*NTRIPResponse)
+			if !isResp {
+				// Non-response message before the response — skip it.
+				respIdx++
+				continue
+			}
 			status := protocol.UnknownStatus
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				status = protocol.SuccessStatus
@@ -1030,7 +1043,6 @@ func (p *NTRIPStreamParser) Match(
 			} else if resp.IsICY {
 				status = protocol.SuccessStatus
 			}
-
 			records = append(records, protocol.Record{
 				Req:            req,
 				Resp:           resp,
@@ -1038,26 +1050,40 @@ func (p *NTRIPStreamParser) Match(
 			})
 			reqIdx++
 			respIdx++
-			continue
+			break
 		}
-		break
+		// No more responses — leave remaining requests in the queue.
+		if respIdx >= len(respMsgs) {
+			break
+		}
 	}
 
-	// Remaining requests (NMEA sentences or unmatched requests)
+	// --- Phase 2: emit remaining non-request messages immediately ---
 	for i := reqIdx; i < len(reqMsgs); i++ {
-		records = append(records, protocol.Record{Req: reqMsgs[i]})
+		if _, isReq := reqMsgs[i].(*NTRIPRequest); !isReq {
+			records = append(records, protocol.Record{Req: reqMsgs[i]})
+		}
 	}
-
-	// Remaining responses (RTCM frames or unmatched responses)
 	for i := respIdx; i < len(respMsgs); i++ {
 		records = append(records, protocol.Record{Resp: respMsgs[i]})
 	}
 
+	// --- Phase 3: trim consumed messages from the queues ---
+	// ReqQueue: remove paired requests + non-request messages, keep unpaired
+	// NTRIPRequest entries so a later response can still pair with them.
 	if q, ok := reqStreams[0]; ok {
-		*q = (*q)[len(reqMsgs):]
+		kept := (*q)[:0]
+		for _, m := range *q {
+			if _, isReq := m.(*NTRIPRequest); isReq {
+				kept = append(kept, m) // unpaired request — keep
+			}
+			// non-request messages are consumed (not kept)
+		}
+		*q = kept
 	}
+	// RespQueue: all responses are consumed.
 	if q, ok := respStreams[0]; ok {
-		*q = (*q)[len(respMsgs):]
+		*q = (*q)[:0]
 	}
 
 	return records
