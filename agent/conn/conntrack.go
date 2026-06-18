@@ -511,9 +511,6 @@ func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernE
 	addedToBuffer := false
 	isReq, _ := isReq(c, ke)
 	if c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && len(data) > 0 {
-		if common.ConntrackLog.Level >= logrus.DebugLevel {
-			common.ConntrackLog.Debugf("[NTRIP-DIR] %s origIsReq=%v data[0]=%02x len=%d", c.ToString(), isReq, data[0], len(data))
-		}
 		// Content-based direction override for NTRIP.
 		// GGA ($-prefixed) is always client→server (request).
 		// RTCM (0xD3 preamble) is always server→client (response).
@@ -545,9 +542,6 @@ func (c *Connection4) addDataToBufferAndTryParse(data []byte, ke *bpf.AgentKernE
 				}
 			}
 		}
-	}
-	if common.ConntrackLog.Level >= logrus.DebugLevel && c.Protocol == bpf.AgentTrafficProtocolTKProtocolNTRIP && len(data) > 0 {
-		common.ConntrackLog.Debugf("[NTRIP-DIR] %s finalIsReq=%v data[0]=%02x", c.ToString(), isReq, data[0])
 	}
 	headerEvt := extractHeaderEvent(data, ke, c)
 	if isReq {
@@ -688,11 +682,6 @@ func (c *Connection4) parseStreamBuffer(streamBuffer *buffer.StreamBuffer, messa
 	// var parseState protocol.ParseState
 	for !stop && !streamBuffer.IsEmpty() {
 		parseResult := parser.ParseStream(streamBuffer, messageType)
-		if common.ConntrackLog.Level >= logrus.DebugLevel {
-			common.ConntrackLog.Debugf("[parseStreamBuffer] %s(%s) result: state=%d readBytes=%d msgs=%d headLen=%d seq=%d",
-				c.ToString(), messageType.String(), parseResult.ParseState, parseResult.ReadBytes, len(parseResult.ParsedMessages),
-				streamBuffer.Head().Len(), streamBuffer.Position0())
-		}
 		// parseState = parseResult.ParseState
 		switch parseResult.ParseState {
 		case protocol.Success:

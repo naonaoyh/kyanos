@@ -21,11 +21,7 @@ import (
 	"net/textproto"
 	"strconv"
 	"strings"
-
-	"github.com/sirupsen/logrus"
 )
-
-var log = logrus.WithField("component", "ntrip-parser")
 
 // Compile-time interface checks
 var _ protocol.ProtocolStreamParser = &NTRIPStreamParser{}
@@ -618,9 +614,7 @@ func (p *NTRIPStreamParser) parseResponseSide(
 
 	// RTCM frame (post-handshake data stream)
 	if buf[0] == 0xD3 && len(buf) >= 3 && (buf[1]&0xFC) == 0x00 {
-		log.Debugf("[NTRIP-RESP] RTCM preamble detected, bufLen=%d seq=%d peek=%x", len(buf), streamBuffer.Position0(), buf[:min(12, len(buf))])
 		result := p.parseRTCMFrame(buf, streamBuffer, messageType)
-		log.Debugf("[NTRIP-RESP] parseRTCMFrame result: state=%d readBytes=%d msgs=%d", result.ParseState, result.ReadBytes, len(result.ParsedMessages))
 		return result
 	}
 
@@ -880,8 +874,6 @@ func (p *NTRIPStreamParser) parseRTCMFrame(
 	}
 
 	result := p.rtcmParser.ParseStream(streamBuffer, messageType)
-	log.Debugf("[NTRIP-RTCM] inner parse state=%d readBytes=%d msgs=%d bufLen=%d seq=%d",
-		result.ParseState, result.ReadBytes, len(result.ParsedMessages), len(buf), streamBuffer.Position0())
 
 	// When the RTCM parser returns Invalid but the buffer starts with a valid
 	// RTCM preamble (0xD3 + reserved bits=0), the CRC likely failed on a
@@ -892,7 +884,6 @@ func (p *NTRIPStreamParser) parseRTCMFrame(
 		len(buf) > 2 && buf[0] == rtcm.RTCMPreamble && (buf[1]&0xFC) == 0x00 {
 		for i := 1; i < len(buf)-2; i++ {
 			if buf[i] == rtcm.RTCMPreamble && (buf[i+1]&0xFC) == 0x00 {
-				log.Debugf("[NTRIP-RTCM] INVALID preamble found, skipping to next RTCM at offset %d", i)
 				return protocol.ParseResult{
 					ParseState: protocol.Invalid,
 					ReadBytes:  i,
@@ -900,7 +891,6 @@ func (p *NTRIPStreamParser) parseRTCMFrame(
 			}
 		}
 		// No next frame found — return original result (NeedsMoreData or Invalid)
-		log.Debugf("[NTRIP-RTCM] INVALID preamble found, no next RTCM frame in buffer")
 		return result
 	}
 

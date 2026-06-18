@@ -257,6 +257,24 @@ def main():
         print("[replay] Handshake injection completed.")
         time.sleep(0.5)
         
+    # 5b. Drain thread: consume data arriving on client sockets so TCP windows stay open.
+    #     Without this, the client recv buffer fills up and blocks s_sock.sendall().
+    drain_stop = threading.Event()
+
+    def drain_client_sockets():
+        while not drain_stop.is_set():
+            for c_sock in client_socks_list:
+                try:
+                    c_sock.settimeout(0.1)
+                    c_sock.recv(65536)
+                except socket.timeout:
+                    pass
+                except Exception:
+                    pass
+
+    drain_thread = threading.Thread(target=drain_client_sockets, daemon=True)
+    drain_thread.start()
+
     # 6. Replay Packets
     print(f"[replay] Playback starting now at {args.speed}x speed (repeat={args.repeat}, duration={args.duration}s)...")
     first_ts = packets[0]['ts']
@@ -348,15 +366,15 @@ def main():
             c_sock = client_mapping[client_key]
             s_sock = server_client_mapping[client_key]
 
-            # Direction: client-originating data goes through client socket,
-            # server-originating data goes through server socket.
+            # Direction: ALL data goes through the server socket so BPF (which
+            # monitors the server process) captures every packet. The NTRIP
+            # direction override in conntrack.go routes content-based:
+            #   GGA ('$' prefix) → Request buffer
+            #   RTCM (0xD3 preamble) → Response buffer
+            # A background drain thread keeps the client recv buffer clear.
             try:
                 t0_send = time.time()
-                if is_client_sending:
-                    c_sock.sendall(payload)
-                else:
-                    s_sock.sendall(payload)
-                    c_sock.sendall(payload)
+                s_sock.sendall(payload)
                 send_duration_ms = (time.time() - t0_send) * 1000.0
                 if send_duration_ms > 50.0:
                     print(f"[WARN] Socket send blocked for {send_duration_ms:.1f} ms on packet {i}!", flush=True)
@@ -382,7 +400,8 @@ def main():
     print(f"[replay-summary] Total loops={loop_count}, Total Duration={total_duration:.2f}s", flush=True)
     
     # 7. Cleanup Sockets
-    time.sleep(1.0)
+    drain_stop.set()
+    time.sleep(0.2)
     for s in client_socks_list + server_socks_list:
         try:
             s.close()
